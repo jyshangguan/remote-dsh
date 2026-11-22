@@ -17,7 +17,7 @@
 
 | 方面 | 上游 `dsh-remote-panel-ssh@0.3.0` | 本 fork `dsh-remote-panel-openssh` |
 | --- | --- | --- |
-| 主机来源 | `dsh-ssh.json` 条目 + 面板内**密码添加**主机 | 仅 `~/.ssh/config` 别名（Include 感知）；无密码、无主机增删按钮 |
+| 主机来源 | `dsh-ssh.json` 条目 + 面板内**密码添加**主机 | 仅 `~/.ssh/config` 别名（Include 感知，只读）；无密码、无主机增删按钮（面板内可隐藏/恢复显示） |
 | 认证 | 密码或私钥路径（读 `privateKeyPath`，与 dsh-ssh 写的 `keyPath` 不兼容） | OpenSSH 公钥 / ssh-agent；`ssh -G` 解析有效配置，多 IdentityFile 顺序回退，`IdentitiesOnly` 尊重 |
 | 主机指纹 | 未见 `known_hosts` 校验 | `ssh-keygen -F` 校验 `known_hosts`（普通/hashed 均可）；未知 / 变更 / 撤销 / CA 一律 **fail-closed**，不写 known_hosts、不做静默 TOFU |
 | 远端进程 | 旧进程**自动 kill 重启**、无 token **自动重启取回** | **绝不 kill / restart / signal**；无法安全接管 → 「需人工处理」卡片（原因 + 建议 + PID + 重试） |
@@ -97,8 +97,12 @@ dsh plugin --profile desktop add link:$(pwd)
 
    动作含义：`可直接接管` / `将侧装并启动` / `需人工处理：<原因>`；
 5. 点 **连接**，阶段依次为：`SSH → 检查环境 → 侧装（如需，首次可能几分钟）→ 启动 dsh web → 建立通道`，每一步都有文字与耗时；
-6. 连上后：**文件**（SFTP 双列传输）/ **重新加载** / **放大**（`Esc` 退出）/ **在新窗口打开** / **断开**；
+6. 连上后：**文件**（SFTP 双列传输）/ **重新加载** / **放大**（`Esc` 退出）/ **在新窗口打开** / **断开**；每台主机还有 **隐藏**（见下）；
 7. 远端 DSH 是独立登录态，第一次需要在那套界面里登录一次。
+
+**会话保活**：切回本地会话或别的面板不会断开远端——SSH 会话与内嵌画面都保留，回到「远程 DSH」面板即恢复离开时的画面（正在进行的对话、滚动位置、未发送的输入都在），无需重新连接；连接/侧装进行中切走再回来，进度同样恢复。刷新整个页面后也会自动接管仍在运行的远端会话（画面会重新加载一次，但 SSH 会话不重建）。
+
+**隐藏/恢复主机**：点主机行的 **隐藏** 可把它从面板列表移除（仅影响面板显示，保存在插件自己的设置文件里，`~/.ssh/config` 完全不改动）；右上角 **已隐藏 (N)** 展开后可 **恢复**。已连接或正在连接的主机需先 **断开** 才能隐藏。
 
 出现「需人工处理」时，面板会显示原因、处理建议与涉及的进程 PID；按提示人工处理后点 **重试**。连接失败同样提供 **重试**。插件不会自动重连。
 
@@ -120,10 +124,10 @@ dsh plugin --profile desktop add link:$(pwd)
 
 ## 限制
 
-- **不自动重连**：会话断开后显示「远端连接已断开，请重新连接」，需手动重试。
-- **单活会话**：同一时刻只保留一个远端会话；连接主机 B 会先断开主机 A。
+- **真正断开后不自动重连**：会话断开后显示「远端连接已断开，请重新连接」，需手动重试。切换面板不算断开——远端画面与会话保活，回到面板即恢复（见「使用」）。
+- **单活会话**：同一时刻只保留一个远端会话；连接主机 B 会先断开主机 A。对已连接的主机重复点「连接」会直接接管现有会话，不再重建。
 - **首次侧装依赖远端环境**：远端需要已安装 Node.js（满足 DSH 的 engines 要求）与 npm；侧装过程可能需要几分钟。
-- 首版不做配置同步、不做主机增删（主机完全由 `~/.ssh/config` 管理）。
+- 首版不做配置同步；主机完全由 `~/.ssh/config` 管理（只读）。面板内可隐藏/恢复主机（仅影响面板显示，存于插件设置文件）；连接中的主机需先断开才能隐藏。
 - 在线编辑写入上限 2 MB；目录传输暂不支持。
 
 ## 故障排查
@@ -140,7 +144,7 @@ dsh plugin --profile desktop add link:$(pwd)
 
 ## English summary
 
-A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. One active session at a time; the two-pane SFTP transfer view is kept from upstream. Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
+A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. One active session at a time; the two-pane SFTP transfer view is kept from upstream. Switching to another panel keeps the remote session AND the exact embedded view alive (returning restores it without reconnecting; a full page refresh re-adopts the live session), and hosts can be hidden/restored in the panel without ever touching `~/.ssh/config` (connected hosts must be disconnected first). Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
 
 **Versus upstream 0.3.0**, this fork additionally: resolves the effective SSH config via `ssh -G` and verifies host keys against `known_hosts` (fail-closed); adds an optional per-host `nodeBin` so an existing nvm Node is used without auto-installing Node; launches with rc.3-correct syntax (`--profile <p> --host … --port …`, no `web` positional) and detects both process forms; resolves the DSH version host-side from `profileContext.installAnchor`; validates launch tokens with a real 303+cookie exchange; styles the panel with `--dsw-alias-*` theme tokens (readable in dark theme); and removes config sync, password hosts, and every auto-kill/restart path. The full comparison table and the six bugs fixed during the real-server pilot (each with a regression test, 121 tests total) are in the Chinese section 「与上游原版的差异」 above.
 

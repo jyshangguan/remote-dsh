@@ -8,7 +8,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { DEFAULT_SETTINGS, listHosts, resolveHost, saveSettings } from '../lib/hosts.js'
+import { DEFAULT_SETTINGS, listHosts, resolveHost, saveSettings, setHidden } from '../lib/hosts.js'
 
 let home
 let dshHome
@@ -58,15 +58,15 @@ describe('listHosts', () => {
     writeStoreRaw(JSON.stringify({ version: 2, hosts: { alpha: { webPort: 19090, profile: 'dev' } } }))
     const hosts = await listHosts(makeDeps(['alpha', 'beta']))
     assert.deepEqual(hosts, [
-      { id: 'openssh:alpha', alias: 'alpha', label: 'alpha', source: 'openssh', webPort: 19090, profile: 'dev', webLog: null, nodeBin: '', installProxy: '' },
-      { id: 'openssh:beta', alias: 'beta', label: 'beta', source: 'openssh', webPort: 18080, profile: 'web', webLog: null, nodeBin: '', installProxy: '' },
+      { id: 'openssh:alpha', alias: 'alpha', label: 'alpha', source: 'openssh', webPort: 19090, profile: 'dev', webLog: null, nodeBin: '', installProxy: '', hidden: false },
+      { id: 'openssh:beta', alias: 'beta', label: 'beta', source: 'openssh', webPort: 18080, profile: 'web', webLog: null, nodeBin: '', installProxy: '', hidden: false },
     ])
   })
 
   it('returns all defaults when the store is missing', async () => {
     const hosts = await listHosts(makeDeps(['gamma']))
     assert.deepEqual(hosts, [
-      { id: 'openssh:gamma', alias: 'gamma', label: 'gamma', source: 'openssh', ...DEFAULT_SETTINGS },
+      { id: 'openssh:gamma', alias: 'gamma', label: 'gamma', source: 'openssh', ...DEFAULT_SETTINGS, hidden: false },
     ])
   })
 
@@ -106,7 +106,7 @@ describe('resolveHost', () => {
     const entry = await resolveHost('openssh:alpha', makeDeps(['alpha']))
     assert.deepEqual(entry, {
       id: 'openssh:alpha', alias: 'alpha', label: 'alpha', source: 'openssh',
-      webPort: 19001, profile: 'lab', webLog: null, nodeBin: '', installProxy: '',
+      webPort: 19001, profile: 'lab', webLog: null, nodeBin: '', installProxy: '', hidden: false,
     })
   })
 
@@ -239,5 +239,107 @@ describe('saveSettings', () => {
       assert.equal(error.code, 'invalid-settings')
       return true
     })
+  })
+
+  it('preserves an existing hidden list when saving settings', async () => {
+    const deps = makeDeps(['alpha', 'beta'])
+    await setHidden('beta', true, deps)
+    await saveSettings('alpha', { webPort: 19050 }, deps)
+    const stored = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
+    assert.deepEqual(stored.hidden, ['beta'])
+    const hosts = await listHosts(deps)
+    assert.equal(hosts.find(host => host.alias === 'beta').hidden, true)
+    assert.equal(hosts.find(host => host.alias === 'alpha').hidden, false)
+  })
+})
+
+describe('setHidden', () => {
+  it('adds, dedupes and removes aliases, persisting across listHosts/resolveHost', async () => {
+    const deps = makeDeps(['alpha', 'beta'])
+    assert.deepEqual(await setHidden('alpha', true, deps), ['alpha'])
+    // Adding the same alias again is a no-op, not a duplicate.
+    assert.deepEqual(await setHidden('alpha', true, deps), ['alpha'])
+    assert.deepEqual(await setHidden('beta', true, deps), ['alpha', 'beta'])
+    let hosts = await listHosts(deps)
+    assert.deepEqual(hosts.map(host => host.hidden), [true, true])
+    assert.equal((await resolveHost('openssh:alpha', deps)).hidden, true)
+    // Removing one alias keeps the other hidden.
+    assert.deepEqual(await setHidden('alpha', false, deps), ['beta'])
+    hosts = await listHosts(deps)
+    assert.deepEqual(hosts.map(host => host.hidden), [false, true])
+    assert.equal((await resolveHost('openssh:alpha', deps)).hidden, false)
+    // Removing an absent alias is a no-op.
+    assert.deepEqual(await setHidden('alpha', false, deps), ['beta'])
+    const stored = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
+    assert.equal(stored.version, 2)
+    assert.deepEqual(stored.hidden, ['beta'])
+  })
+
+  it('treats a corrupt store as an empty hidden list', async () => {
+    writeStoreRaw('{corrupt')
+    const deps = makeDeps(['alpha'])
+    const hosts = await listHosts(deps)
+    assert.equal(hosts[0].hidden, false)
+    assert.deepEqual(await setHidden('alpha', true, deps), ['alpha'])
+    const stored = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
+    assert.deepEqual(stored.hidden, ['alpha'])
+  })
+
+  it('sanitizes a stored hidden list to unique strings', async () => {
+    writeStoreRaw(JSON.stringify({ version: 2, hosts: {}, hidden: ['alpha', 'alpha', 42, null, 'beta'] }))
+    const hosts = await listHosts(makeDeps(['alpha', 'beta', 'gamma']))
+    assert.deepEqual(hosts.map(host => host.hidden), [true, true, false])
+    assert.deepEqual(await setHidden('gamma', true, makeDeps(['alpha', 'beta', 'gamma'])), ['alpha', 'beta', 'gamma'])
+  })
+
+  it('keeps a hidden alias out of listHosts once it leaves the ssh config', async () => {
+    await setHidden('ghost', true, makeDeps(['ghost']))
+    const hosts = await listHosts(makeDeps(['alpha']))
+    assert.deepEqual(hosts.map(host => host.alias), ['alpha'])
+    // The stored list keeps the alias (panel state), but nothing lists it.
+    const stored = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
+    assert.deepEqual(stored.hidden, ['ghost'])
+    assert.equal(await resolveHost('openssh:ghost', makeDeps(['alpha'])), null)
+  })
+
+  it('writes atomically: mkdir 0700, tmp 0600, rename, no tmp left behind', async () => {
+    const calls = []
+    const deps = makeDeps(['alpha'], {
+      mkdir: async (dir, options) => { calls.push(['mkdir', dir, options]); return fsp.mkdir(dir, options) },
+      writeFile: async (file, data, options) => { calls.push(['write', file, options]); return fsp.writeFile(file, data, options) },
+      rename: async (from, to) => { calls.push(['rename', from, to]); return fsp.rename(from, to) },
+    })
+    await setHidden('alpha', true, deps)
+    assert.deepEqual(calls.map(call => call[0]), ['mkdir', 'write', 'rename'])
+    assert.equal(calls[0][1], dshHome)
+    assert.equal(calls[0][2].mode, 0o700)
+    assert.equal(calls[1][1], storeFile() + '.tmp')
+    assert.equal(calls[1][2].mode, 0o600)
+    assert.deepEqual(calls[2].slice(1), [storeFile() + '.tmp', storeFile()])
+    assert.equal(fs.existsSync(storeFile() + '.tmp'), false)
+    assert.equal(fs.statSync(storeFile()).mode & 0o777, 0o600)
+    assert.equal(fs.statSync(dshHome).mode & 0o777, 0o700)
+  })
+
+  it('rejects invalid aliases with invalid-settings and never writes', async () => {
+    for (const alias of ['', '-alpha', 'has space', '../x', 'al/phA', 'wéb', 42, null, undefined]) {
+      await assert.rejects(() => setHidden(alias, true, makeDeps(['alpha'])), error => {
+        assert.equal(error.code, 'invalid-settings')
+        assert.equal(error.message, '别名不合法：只允许字母、数字和 ._@-，且不能以 - 开头')
+        return true
+      })
+    }
+    assert.equal(fs.existsSync(storeFile()), false)
+  })
+
+  it('rejects a non-boolean hidden flag with invalid-settings', async () => {
+    for (const hidden of ['true', 1, 0, null, undefined, {}]) {
+      await assert.rejects(() => setHidden('alpha', hidden, makeDeps(['alpha'])), error => {
+        assert.equal(error.code, 'invalid-settings')
+        assert.equal(error.message, 'hidden 必须是布尔值')
+        return true
+      })
+    }
+    assert.equal(fs.existsSync(storeFile()), false)
   })
 })

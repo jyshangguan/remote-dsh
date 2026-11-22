@@ -105,6 +105,7 @@ const makeHarness = (overrides = {}) => {
       { id: 'openssh:beta', alias: 'beta', label: 'beta', source: 'openssh', webPort: 18081, profile: 'web', webLog: '', installProxy: '' },
     ],
     sessions: [],
+    hidden: new Set(),
     openCalls: [],
     probeCalls: [],
     saveCalls: [],
@@ -112,6 +113,7 @@ const makeHarness = (overrides = {}) => {
     probeImpl: null,
     saveImpl: null,
     listImpl: null,
+    setHiddenImpl: null,
   }
   const makeSession = (entry) => {
     const record = { entry, closeCalls: 0, dead: [], proxyUrl: 'http://127.0.0.1:41234/' }
@@ -130,9 +132,12 @@ const makeHarness = (overrides = {}) => {
     localFs: () => fakeFs('/local/home', 'local.txt'),
     listHosts: async () => {
       if (state.listImpl !== null) return state.listImpl()
-      return state.hosts.map(host => ({ ...host }))
+      return state.hosts.map(host => ({ ...host, hidden: state.hidden.has(host.alias) }))
     },
-    resolveHost: async id => state.hosts.find(host => host.id === id) ?? null,
+    resolveHost: async id => {
+      const host = state.hosts.find(item => item.id === id)
+      return host === undefined ? null : { ...host, hidden: state.hidden.has(host.alias) }
+    },
     saveSettings: async (alias, patch) => {
       state.saveCalls.push({ alias, patch })
       if (state.saveImpl !== null) return state.saveImpl(alias, patch)
@@ -143,6 +148,12 @@ const makeHarness = (overrides = {}) => {
       }
       for (const [key, value] of Object.entries(patch)) if (value !== undefined) host[key] = value
       return { ...host }
+    },
+    setHidden: async (alias, hidden) => {
+      if (state.setHiddenImpl !== null) return state.setHiddenImpl(alias, hidden)
+      if (hidden === true) state.hidden.add(alias)
+      else state.hidden.delete(alias)
+      return [...state.hidden]
     },
     probeHost: async (entry, version) => {
       state.probeCalls.push({ entry, version })
@@ -181,6 +192,7 @@ test('plugin identity and exact route table, no sync routes', async () => {
     ['exact', API + '/hosts'],
     ['exact', API + '/connect'],
     ['exact', API + '/disconnect'],
+    ['exact', API + '/hide'],
     ['exact', API + '/state'],
     ['exact', API + '/test'],
     ['prefix', API + '/fs'],
@@ -486,5 +498,188 @@ test('method and body validation: 405 for wrong methods, 400 for invalid JSON', 
   const noId = await call(app, 'POST', API + '/connect', {})
   assert.equal(noId.status, 400)
   assert.equal(noId.json.error, 'id is required')
+  await app.closeAll()
+})
+
+test('connect: repeat connect on a ready host is idempotent (200, same session)', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const ready = await waitStage(app, 'openssh:alpha', 'ready')
+  const again = await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  assert.equal(again.status, 200)
+  assert.equal(again.json.stage, 'ready')
+  assert.equal(again.json.alreadyConnected, true)
+  assert.equal(again.json.proxyUrl, ready.proxyUrl)
+  assert.equal(again.json.sessionId, ready.sessionId)
+  assert.equal(again.json.sinceMs, 0)
+  assert.ok(Array.isArray(again.json.hosts))
+  // The healthy session was neither reopened nor torn down.
+  assert.equal(state.openCalls.length, 1)
+  assert.equal(state.sessions.length, 1)
+  assert.equal(state.sessions[0].closeCalls, 0)
+  await app.closeAll()
+})
+
+test('state: rows carry a numeric sessionId when connected and null otherwise', async () => {
+  const { app } = makeHarness()
+  const idle = await hostRow(app, 'openssh:alpha')
+  assert.equal(idle.sessionId, null)
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const ready = await waitStage(app, 'openssh:alpha', 'ready')
+  assert.equal(typeof ready.sessionId, 'number')
+  assert.ok(ready.sessionId > 0)
+  const other = await hostRow(app, 'openssh:beta')
+  assert.equal(other.sessionId, null)
+  await app.closeAll()
+})
+
+test('connect: after session death a new connect starts a job with a new sessionId', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const first = await waitStage(app, 'openssh:alpha', 'ready')
+  state.sessions[0].dead[0]()
+  const restarted = await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  assert.equal(restarted.status, 202)
+  const second = await waitStage(app, 'openssh:alpha', 'ready')
+  assert.equal(typeof second.sessionId, 'number')
+  assert.notEqual(second.sessionId, first.sessionId)
+  assert.equal(state.openCalls.length, 2)
+  await app.closeAll()
+})
+
+test('connect: after /disconnect a new connect starts a fresh job (202)', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const first = await waitStage(app, 'openssh:alpha', 'ready')
+  await call(app, 'POST', API + '/disconnect', { id: 'openssh:alpha' })
+  const restarted = await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  assert.equal(restarted.status, 202)
+  assert.equal(restarted.json.alreadyConnected, undefined)
+  const second = await waitStage(app, 'openssh:alpha', 'ready')
+  assert.notEqual(second.sessionId, first.sessionId)
+  assert.equal(state.openCalls.length, 2)
+  await app.closeAll()
+})
+
+test('hide: an idle host becomes hidden:true and stays listed with the flag', async () => {
+  const { app, state } = makeHarness()
+  const { status, json } = await call(app, 'POST', API + '/hide', { id: 'openssh:beta', hidden: true })
+  assert.equal(status, 200)
+  assert.equal(json.hosts.length, 2) // describe() never filters hidden rows
+  assert.equal(json.hosts.find(host => host.id === 'openssh:beta').hidden, true)
+  assert.equal(json.hosts.find(host => host.id === 'openssh:alpha').hidden, false)
+  assert.ok(state.hidden.has('beta'))
+  assert.equal((await hostRow(app, 'openssh:beta')).hidden, true)
+  await app.closeAll()
+})
+
+test('hide: a connected host is refused with 409', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'ready')
+  const { status, json } = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  assert.equal(status, 409)
+  assert.equal(json.error, '主机已连接或正在连接，请先断开再隐藏')
+  assert.equal(state.hidden.size, 0)
+  await app.closeAll()
+})
+
+test('hide: an in-flight connect is refused with 409', async () => {
+  const { app, state } = makeHarness()
+  const gate = deferred()
+  state.openImpl = (entry, options, makeSession) => gate.promise.then(() => makeSession(entry).session)
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const refused = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  assert.equal(refused.status, 409)
+  assert.equal(refused.json.error, '主机已连接或正在连接，请先断开再隐藏')
+  assert.equal(state.hidden.size, 0)
+  gate.resolve()
+  await waitStage(app, 'openssh:alpha', 'ready')
+  await app.closeAll()
+})
+
+test('hide: a settled failed job does not block hiding', async () => {
+  const { app, state } = makeHarness()
+  state.openImpl = async () => { throw new Error('known_hosts 校验失败') }
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'failed')
+  const { status, json } = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  assert.equal(status, 200)
+  assert.equal(json.hosts.find(host => host.id === 'openssh:alpha').hidden, true)
+  await app.closeAll()
+})
+
+test('hide: restoring with hidden:false clears the flag and allows connect again', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  const restored = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: false })
+  assert.equal(restored.status, 200)
+  assert.equal(restored.json.hosts.find(host => host.id === 'openssh:alpha').hidden, false)
+  assert.equal(state.hidden.size, 0)
+  const started = await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  assert.equal(started.status, 202)
+  await waitStage(app, 'openssh:alpha', 'ready')
+  await app.closeAll()
+})
+
+test('hide: unknown id -> 404', async () => {
+  const { app } = makeHarness()
+  const { status, json } = await call(app, 'POST', API + '/hide', { id: 'openssh:nope', hidden: true })
+  assert.equal(status, 404)
+  assert.equal(json.error, '未找到主机 openssh:nope')
+  await app.closeAll()
+})
+
+test('hide: body and method validation (400 / 405)', async () => {
+  const { app, state } = makeHarness()
+  const wrongMethod = await call(app, 'GET', API + '/hide')
+  assert.equal(wrongMethod.status, 405)
+  const badJson = await call(app, 'POST', API + '/hide', Buffer.from('{not json'))
+  assert.equal(badJson.status, 400)
+  assert.equal(badJson.json.error, 'invalid JSON body')
+  const badBodies = [
+    { hidden: true },
+    { id: 42, hidden: true },
+    { id: '', hidden: true },
+    { id: 'openssh:alpha' },
+    { id: 'openssh:alpha', hidden: 'true' },
+    { id: 'openssh:alpha', hidden: 1 },
+    { id: 'openssh:alpha', hidden: null },
+  ]
+  for (const body of badBodies) assert.equal((await call(app, 'POST', API + '/hide', body)).status, 400)
+  assert.equal(state.hidden.size, 0)
+  await app.closeAll()
+})
+
+test('hide: a store failure becomes a 400 with the message', async () => {
+  const { app, state } = makeHarness()
+  state.setHiddenImpl = async () => {
+    throw Object.assign(new Error('别名不合法：只允许字母、数字和 ._@-，且不能以 - 开头'), { code: 'invalid-settings' })
+  }
+  const { status, json } = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  assert.equal(status, 400)
+  assert.match(json.error, /别名不合法/)
+  assert.equal(state.hidden.size, 0)
+  await app.closeAll()
+})
+
+test('connect: a hidden host is refused with 409 until restored', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  const refused = await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  assert.equal(refused.status, 409)
+  assert.equal(refused.json.error, '主机已隐藏，请先在面板中恢复')
+  assert.equal(state.openCalls.length, 0)
+  await app.closeAll()
+})
+
+test('hosts: settings save round-trip preserves the hidden list', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/hide', { id: 'openssh:beta', hidden: true })
+  const saved = await call(app, 'POST', API + '/hosts', { alias: 'alpha', webPort: 19090 })
+  assert.equal(saved.status, 201)
+  assert.equal(saved.json.hosts.find(host => host.id === 'openssh:beta').hidden, true)
+  assert.equal(saved.json.hosts.find(host => host.id === 'openssh:alpha').hidden, false)
+  assert.ok(state.hidden.has('beta'))
   await app.closeAll()
 })
