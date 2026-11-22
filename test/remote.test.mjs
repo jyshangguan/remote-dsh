@@ -156,10 +156,12 @@ test('webServers parses --profile variants and respects the port boundary', asyn
     row(300, 1700000002, 'node /x/dsh --profile other web --port 19090'),
     row(400, 1700000003, 'node /x/dsh --profile web web --port 180801'),
     row(500, 1700000004, 'sh -c pgrep -f dsh web --port 18080'),
+    // rc.3 form: no `web` positional, the web app flags follow --profile.
+    row(600, 1700000005, 'node /x/dsh --profile web --host 127.0.0.1 --port 18080 --no-open'),
   ].join('\n') + '\n'
   const client = fakeClient([pgrepReply(stdout)])
   const servers = await webServers(client, 18080)
-  assert.deepEqual(servers.map(s => s.pid), [100, 200])
+  assert.deepEqual(servers.map(s => s.pid), [100, 200, 600])
   assert.equal(servers[0].startedAt, 1700000000)
   assertNoKill(client.commands)
 })
@@ -334,6 +336,9 @@ test('fresh start: missing side runtime installs ONLY into our prefix, spawns sa
   const spawn = commands.find(c => /nohup env/.test(c))
   assert.ok(spawn.includes('DSH_HOME="$HOME/.dsh"'), 'DSH_HOME not pinned')
   assert.ok(spawn.includes('--profile web'))
+  // rc.3: no `web` positional after --profile (the app rejects it).
+  assert.ok(!/--profile web web/.test(spawn), 'stale web positional in spawn: ' + spawn)
+  assert.ok(spawn.includes('--profile web --host 127.0.0.1'), 'web app flags must follow --profile directly')
   assert.ok(spawn.includes('umask 077'))
   assert.ok(spawn.includes('--host 127.0.0.1'))
   assert.ok(spawn.includes('--port 18080'))
