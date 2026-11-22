@@ -166,6 +166,16 @@ test('webServers parses --profile variants and respects the port boundary', asyn
   assertNoKill(client.commands)
 })
 
+test('dsh web scan is scoped to the connecting user (no cross-user false conflict)', async () => {
+  // On a multi-user server another user's `dsh web` has its own DSH_HOME and
+  // must not trigger the same-profile guard. The scan therefore restricts
+  // pgrep to the connecting uid; a system-wide scan was the false-positive bug.
+  const client = fakeClient([pgrepReply('')])
+  await webServers(client, 18080)
+  assert.ok(client.commands.some(c => /pgrep -f -u "\$\(id -u\)"/.test(c)), 'process scan must be uid-scoped')
+  assertNoKill(client.commands)
+})
+
 // ---------------------------------------------------------------------------
 test('attach: alive port + valid token builds the gateway with no install/spawn', async () => {
   const client = fakeClient([
