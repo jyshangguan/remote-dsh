@@ -97,7 +97,7 @@ const pgrepReply = (stdout = '') => [/pgrep -f/, { code: 0, stdout, stderr: '' }
 const portReply = (count = '0') => [/ss -ltn/, { code: 0, stdout: count + '\n', stderr: '' }]
 const sideReply = v => [/node_modules\/\.bin\/dsh" --version/, { code: 0, stdout: v === '' ? '' : v + '\n', stderr: '' }]
 const lsReply = (names = []) => [/^ls -1t/, { code: 0, stdout: names.length ? names.join('\n') + '\n' : '', stderr: '' }]
-const npmPathReply = () => [/^command -v npm/, { code: 0, stdout: '/usr/bin/npm\n', stderr: '' }]
+const npmPathReply = () => [/command -v npm/, { code: 0, stdout: '/usr/bin/npm\n', stderr: '' }]
 const installMkdirReply = () => [/^mkdir -p "[^"]*\/runtime\//, { code: 0, stdout: '', stderr: '' }]
 const npmReply = () => [/npm i --prefix/, { code: 0, stdout: 'added 1 package in 2s\n', stderr: '' }]
 const lockReply = (code = 0) => [/&& mkdir ".*\.lock"/, { code, stdout: '', stderr: '' }]
