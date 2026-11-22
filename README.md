@@ -29,7 +29,7 @@
 | token 处理 | 无 token 时重启服务取回 | 候选 token 经**真实 303 + Set-Cookie 交换**验证；401 重读重试一次；不可读 → 人工处理，不重启 |
 | 配置同步 | 把本机插件 / provider / API Key 同步到远端 profile 与 `.env` | **删除**；远端复用服务器自己的 `~/.dsh`、profile、模型与插件 |
 | 主题 | 硬编码白底 + `inherit` 文字（深色主题下白底浅字不可读） | 全部改用 `--dsw-alias-*` 主题 token，深 / 浅色自适应 |
-| 会话策略 | 每主机一条会话 | **单活会话** + generation 计数防连接竞态；切主机先断旧会话 |
+| 会话策略 | 每主机一条会话 | **多会话并发**：各主机独立保活，经主机列表切换；每主机 generation 计数防连接竞态 |
 | 本机存储 | `remote-dsh.json`（密码明文，0600） | `remote-dsh-openssh.json`（0600 原子写入，**仅非敏感字段**） |
 | 启动日志 | 复用 / 截断 `~/.dsh/logs/dsh-web.log` | 写入自有 logs 目录下**全新唯一**文件（`umask 077`），绝不截断已有日志 |
 | 并发启动 | 无锁 | 远端原子 `mkdir` 启动锁，防并发拉起两个实例；锁不自动清除 |
@@ -102,6 +102,8 @@ dsh plugin --profile desktop add link:$(pwd)
 
 **会话保活**：切回本地会话或别的面板不会断开远端——SSH 会话与内嵌画面都保留，回到「远程 DSH」面板即恢复离开时的画面（正在进行的对话、滚动位置、未发送的输入都在），无需重新连接；连接/侧装进行中切走再回来，进度同样恢复。刷新整个页面后也会自动接管仍在运行的远端会话（画面会重新加载一次，但 SSH 会话不重建）。
 
+**多会话并发**：可同时连接多台服务器。会话内点 **主机** 回到主机列表（当前会话不断开、画面保活），列表里已连接的主机显示 **进入** 与 **断开**；点 **进入** 即切到该主机的实时画面，各主机的画面互不影响、切换不重载。连接新主机不会断开已连接的主机。
+
 **隐藏/恢复主机**：点主机行的 **隐藏** 可把它从面板列表移除（仅影响面板显示，保存在插件自己的设置文件里，`~/.ssh/config` 完全不改动）；右上角 **已隐藏 (N)** 展开后可 **恢复**。已连接或正在连接的主机需先 **断开** 才能隐藏。
 
 出现「需人工处理」时，面板会显示原因、处理建议与涉及的进程 PID；按提示人工处理后点 **重试**。连接失败同样提供 **重试**。插件不会自动重连。
@@ -125,7 +127,7 @@ dsh plugin --profile desktop add link:$(pwd)
 ## 限制
 
 - **真正断开后不自动重连**：会话断开后显示「远端连接已断开，请重新连接」，需手动重试。切换面板不算断开——远端画面与会话保活，回到面板即恢复（见「使用」）。
-- **单活会话**：同一时刻只保留一个远端会话；连接主机 B 会先断开主机 A。对已连接的主机重复点「连接」会直接接管现有会话，不再重建。
+- **多会话并发**：可同时连接多台服务器，各自保持独立的 SSH 会话与内嵌画面；会话内点 **主机** 回到列表（不断开），点已连接主机的 **进入** 即切回其实时画面（不重建、不重载）。每台已连接主机占用一条 SSH 连接 + 一个本机网关 + 一个保活内嵌画面，资源随连接数线性增长，用 **断开** 管理数量。对已连接主机重复点「进入/连接」直接接管现有会话。
 - **首次侧装依赖远端环境**：远端需要已安装 Node.js（满足 DSH 的 engines 要求）与 npm；侧装过程可能需要几分钟。
 - 首版不做配置同步；主机完全由 `~/.ssh/config` 管理（只读）。面板内可隐藏/恢复主机（仅影响面板显示，存于插件设置文件）；连接中的主机需先断开才能隐藏。
 - 在线编辑写入上限 2 MB；目录传输暂不支持。
@@ -144,7 +146,7 @@ dsh plugin --profile desktop add link:$(pwd)
 
 ## English summary
 
-A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. One active session at a time; the two-pane SFTP transfer view is kept from upstream. Switching to another panel keeps the remote session AND the exact embedded view alive (returning restores it without reconnecting; a full page refresh re-adopts the live session), and hosts can be hidden/restored in the panel without ever touching `~/.ssh/config` (connected hosts must be disconnected first). Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
+A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. Multiple servers stay connected concurrently, each with its own kept-alive embedded view; switch between them via the host list (a 主机 button returns to the list without disconnecting, 进入 re-enters a live view without reloading). The two-pane SFTP transfer view is kept from upstream. Switching to another panel keeps every remote session AND its exact embedded view alive (returning restores it without reconnecting; a full page refresh re-adopts the live sessions), and hosts can be hidden/restored in the panel without ever touching `~/.ssh/config` (connected hosts must be disconnected first). Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
 
 **Versus upstream 0.3.0**, this fork additionally: resolves the effective SSH config via `ssh -G` and verifies host keys against `known_hosts` (fail-closed); adds an optional per-host `nodeBin` so an existing nvm Node is used without auto-installing Node; launches with rc.3-correct syntax (`--profile <p> --host … --port …`, no `web` positional) and detects both process forms; resolves the DSH version host-side from `profileContext.installAnchor`; validates launch tokens with a real 303+cookie exchange; styles the panel with `--dsw-alias-*` theme tokens (readable in dark theme); and removes config sync, password hosts, and every auto-kill/restart path. The full comparison table and the six bugs fixed during the real-server pilot (each with a regression test, 121 tests total) are in the Chinese section 「与上游原版的差异」 above.
 

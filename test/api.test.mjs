@@ -341,20 +341,24 @@ test('connect: a second connect for the same in-flight host returns the existing
   await app.closeAll()
 })
 
-test('connect: starting host B closes host A first (single active session)', async () => {
+test('connect: connecting host B keeps host A alive (concurrent sessions)', async () => {
   const { app, state } = makeHarness()
   await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
   await waitStage(app, 'openssh:alpha', 'ready')
   const recordA = state.sessions[0]
   await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
   await waitStage(app, 'openssh:beta', 'ready')
-  assert.equal(recordA.closeCalls, 1)
+  assert.equal(recordA.closeCalls, 0)
   const rowA = await hostRow(app, 'openssh:alpha')
-  assert.equal(rowA.connected, false)
-  assert.equal(rowA.stage, 'idle')
-  assert.equal(rowA.proxyUrl, null)
+  assert.equal(rowA.connected, true)
+  assert.equal(rowA.stage, 'ready')
+  assert.ok(rowA.proxyUrl)
   const rowB = await hostRow(app, 'openssh:beta')
   assert.equal(rowB.connected, true)
+  assert.equal(typeof rowA.sessionId, 'number')
+  assert.equal(typeof rowB.sessionId, 'number')
+  assert.notEqual(rowA.sessionId, rowB.sessionId)
+  assert.equal(state.sessions.length, 2)
   await app.closeAll()
 })
 
@@ -373,6 +377,48 @@ test('connect: a superseded job closes its late session and never publishes it',
   assert.equal(row.connected, false)
   assert.equal(row.proxyUrl, null)
   assert.equal(row.error, null)
+  await app.closeAll()
+})
+
+test('connect: connecting B does not supersede A in-flight job', async () => {
+  const { app, state } = makeHarness()
+  const gate = deferred()
+  state.openImpl = (entry, options, makeSession) => entry.id === 'openssh:alpha'
+    ? gate.promise.then(() => makeSession(entry).session)
+    : makeSession(entry).session
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
+  await waitStage(app, 'openssh:beta', 'ready')
+  // Beta's connect must not have superseded alpha's gated in-flight job.
+  gate.resolve()
+  await waitStage(app, 'openssh:alpha', 'ready')
+  const rowA = await hostRow(app, 'openssh:alpha')
+  const rowB = await hostRow(app, 'openssh:beta')
+  assert.equal(rowA.connected, true)
+  assert.equal(rowB.connected, true)
+  assert.equal(state.sessions.length, 2)
+  for (const record of state.sessions) assert.equal(record.closeCalls, 0)
+  await app.closeAll()
+})
+
+test('connect: concurrent sessions both reachable via idempotent connect', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const readyA = await waitStage(app, 'openssh:alpha', 'ready')
+  await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
+  const readyB = await waitStage(app, 'openssh:beta', 'ready')
+  const againA = await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  assert.equal(againA.status, 200)
+  assert.equal(againA.json.alreadyConnected, true)
+  assert.equal(againA.json.proxyUrl, readyA.proxyUrl)
+  assert.equal(againA.json.sessionId, readyA.sessionId)
+  const againB = await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
+  assert.equal(againB.status, 200)
+  assert.equal(againB.json.alreadyConnected, true)
+  assert.equal(againB.json.proxyUrl, readyB.proxyUrl)
+  assert.equal(againB.json.sessionId, readyB.sessionId)
+  // No new opens: both healthy sessions were kept untouched.
+  assert.equal(state.openCalls.length, 2)
   await app.closeAll()
 })
 
@@ -465,6 +511,26 @@ test('disconnect closes the session and clears the job', async () => {
   await app.closeAll()
 })
 
+test('disconnect: disconnect one leaves the other', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'ready')
+  await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
+  await waitStage(app, 'openssh:beta', 'ready')
+  const recordA = state.sessions[0]
+  const recordB = state.sessions[1]
+  const { status } = await call(app, 'POST', API + '/disconnect', { id: 'openssh:alpha' })
+  assert.equal(status, 200)
+  const rowA = await hostRow(app, 'openssh:alpha')
+  assert.equal(rowA.connected, false)
+  assert.equal(rowA.stage, 'idle')
+  const rowB = await hostRow(app, 'openssh:beta')
+  assert.equal(rowB.connected, true)
+  assert.equal(recordA.closeCalls, 1)
+  assert.equal(recordB.closeCalls, 0)
+  await app.closeAll()
+})
+
 test('closeAll closes every live session and clears jobs', async () => {
   const { app, state } = makeHarness()
   await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
@@ -475,6 +541,18 @@ test('closeAll closes every live session and clears jobs', async () => {
   assert.equal(row.stage, 'idle')
   assert.equal(row.connected, false)
   await app.closeAll()
+})
+
+test('closeAll closes every concurrent session', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'ready')
+  await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
+  await waitStage(app, 'openssh:beta', 'ready')
+  assert.equal(state.sessions.length, 2)
+  await app.closeAll()
+  assert.equal(state.sessions[0].closeCalls, 1)
+  assert.equal(state.sessions[1].closeCalls, 1)
 })
 
 test('handlers never leak thrown errors: listHosts failure becomes a 500 JSON', async () => {
@@ -581,6 +659,27 @@ test('hide: a connected host is refused with 409', async () => {
   assert.equal(status, 409)
   assert.equal(json.error, '主机已连接或正在连接，请先断开再隐藏')
   assert.equal(state.hidden.size, 0)
+  await app.closeAll()
+})
+
+test('hide: guard with two connected hosts', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'ready')
+  await call(app, 'POST', API + '/connect', { id: 'openssh:beta' })
+  await waitStage(app, 'openssh:beta', 'ready')
+  const hideA = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  assert.equal(hideA.status, 409)
+  const hideB = await call(app, 'POST', API + '/hide', { id: 'openssh:beta', hidden: true })
+  assert.equal(hideB.status, 409)
+  assert.equal(state.hidden.size, 0)
+  await call(app, 'POST', API + '/disconnect', { id: 'openssh:alpha' })
+  const hidden = await call(app, 'POST', API + '/hide', { id: 'openssh:alpha', hidden: true })
+  assert.equal(hidden.status, 200)
+  const rowA = await hostRow(app, 'openssh:alpha')
+  assert.equal(rowA.hidden, true)
+  const rowB = await hostRow(app, 'openssh:beta')
+  assert.equal(rowB.connected, true)
   await app.closeAll()
 })
 
