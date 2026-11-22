@@ -153,7 +153,7 @@ describe('saveSettings', () => {
   })
 
   it('validates webLog: null, absolute, or ~/ paths only', async () => {
-    for (const webLog of ['', 'relative.log', '~x', 'http://x/y', 42]) {
+    for (const webLog of ['relative.log', '~x', 'http://x/y', 42]) {
       await assert.rejects(() => saveSettings('alpha', { webLog }, makeDeps(['alpha'])), error => {
         assert.equal(error.code, 'invalid-settings')
         return true
@@ -161,6 +161,8 @@ describe('saveSettings', () => {
     }
     const deps = makeDeps(['alpha'])
     assert.equal((await saveSettings('alpha', { webLog: null }, deps)).webLog, null)
+    // An empty UI input means "automatic" and normalizes to null.
+    assert.equal((await saveSettings('alpha', { webLog: '' }, deps)).webLog, null)
     assert.equal((await saveSettings('alpha', { webLog: '/var/log/dsh.log' }, deps)).webLog, '/var/log/dsh.log')
     // ~/ is stored as-is; expansion happens remotely.
     assert.equal((await saveSettings('alpha', { webLog: '~/logs/dsh-web.log' }, deps)).webLog, '~/logs/dsh-web.log')
