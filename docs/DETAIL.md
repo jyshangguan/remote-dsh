@@ -31,4 +31,21 @@
 - 私钥带口令：先 `ssh-add`。
 - 需人工处理：按卡片提示人工确认进程 / 服务后重试，插件不会替你结束或重启。
 
-来源：fork 自 1583477320/remote-dsh（基线 npm dsh-remote-panel-ssh@0.3.0），Apache-2.0。
+## 与上游原版的差异
+
+基线为 npm `dsh-remote-panel-ssh@0.3.0`。本 fork 的主要不同：
+
+- **主机与认证**：主机仅来自 `~/.ssh/config`（上游还支持密码添加）；认证只走 OpenSSH 公钥/agent，`ssh -G` 解析有效配置；新增 `known_hosts` 校验，未知/变更/撤销指纹一律拒绝（上游未见校验）。
+- **远端生命周期**：删除上游一切自动 kill/restart（旧进程自愈重启、无 token 重启取回）；无法安全接管时改为「需人工处理」卡片。
+- **安装隔离**：侧装到 `~/.local/share/dsh-remote-panel-openssh/runtime/<版本>/`，不覆盖 `~/.local/bin/dsh`（上游用 `npm i -g --prefix ~/.local`）。
+- **nodeBin**：新增可选远端 Node bin 目录（如 nvm），用已有合适 Node 安装/启动，不自动装 Node。
+- **rc.3 适配**：启动用 `--profile <p> --host … --port …`（去掉上游的 `web` 位置参数，rc.3 会拒绝）；进程检测同时匹配新旧两种形态。
+- **版本门禁**：宿主侧从 `profileContext.installAnchor` 解析版本并钉死 0.2.2-rc.3（上游允许浏览器传版本）。
+- **token**：候选经真实 303+cookie 交换验证，不可读时人工处理而非重启。
+- **删除配置同步**：不再把本机插件/provider/API Key 同步到远端。
+- **主题**：面板改用 `--dsw-alias-*` token，深色主题可读（上游硬编码白底）。
+- **存储**：`remote-dsh-openssh.json` 仅存非敏感字段（上游存密码明文）。
+
+试点中另修复 6 个基线缺陷（webLog 空值、attach 误检 Node、重挂载 ssh2 加载、`command -v` 内建、rc.3 启动语法、深色主题），均含回归测试，全套 121 个测试通过。完整对照表见仓库 README「与上游原版的差异」。
+
+来源：fork 自 1583477320/remote-dsh（基线 npm dsh-remote-panel-ssh@0.3.0），发布在 jyshangguan/remote-dsh，Apache-2.0。

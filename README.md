@@ -8,13 +8,46 @@
 
 ## 来源与许可
 
-- 上游：[1583477320/remote-dsh](https://github.com/1583477320/remote-dsh)，基线为 npm 包 `dsh-remote-panel-ssh@0.3.0`。
+- 上游：[1583477320/remote-dsh](https://github.com/1583477320/remote-dsh)，基线为 npm 包 `dsh-remote-panel-ssh@0.3.0`（上游 GitHub `main` 当时为 0.1.1；本 fork 以**发布的 0.3.0 tarball** 为基线，SHA1 校验后逐字导入，再在其上修改）。
 - 本 fork 在其基础上做了安全化重写，沿用 **Apache-2.0** 许可（见 `LICENSE`）。
-- 与上游的主要差异：
-  - **删除**配置同步（插件 / provider / API Key 同步）、密码添加主机、删除主机按钮；
-  - **删除**一切自动 kill / restart 远端进程的路径（包括上游的「旧进程自愈重启」「无 token 重启取回」）；
-  - 主机唯一来源是 `~/.ssh/config`，认证只走 OpenSSH 公钥 / agent；
-  - 新增版本门禁（首版仅支持 DSH `0.2.2-rc.3`，宿主侧判定）与单活会话策略。
+
+## 与上游原版的差异
+
+### 行为对照
+
+| 方面 | 上游 `dsh-remote-panel-ssh@0.3.0` | 本 fork `dsh-remote-panel-openssh` |
+| --- | --- | --- |
+| 主机来源 | `dsh-ssh.json` 条目 + 面板内**密码添加**主机 | 仅 `~/.ssh/config` 别名（Include 感知）；无密码、无主机增删按钮 |
+| 认证 | 密码或私钥路径（读 `privateKeyPath`，与 dsh-ssh 写的 `keyPath` 不兼容） | OpenSSH 公钥 / ssh-agent；`ssh -G` 解析有效配置，多 IdentityFile 顺序回退，`IdentitiesOnly` 尊重 |
+| 主机指纹 | 未见 `known_hosts` 校验 | `ssh-keygen -F` 校验 `known_hosts`（普通/hashed 均可）；未知 / 变更 / 撤销 / CA 一律 **fail-closed**，不写 known_hosts、不做静默 TOFU |
+| 远端进程 | 旧进程**自动 kill 重启**、无 token **自动重启取回** | **绝不 kill / restart / signal**；无法安全接管 → 「需人工处理」卡片（原因 + 建议 + PID + 重试） |
+| 安装位置 | `npm i -g --prefix "$HOME/.local"`（覆盖 `~/.local/bin/dsh`） | 侧装到 `~/.local/share/dsh-remote-panel-openssh/runtime/<版本>/`（`npm i --prefix`），不碰全局 prefix 与已有 `dsh` |
+| Node 选择 | 远端默认 PATH 的 node/npm | 可选 **`nodeBin`** 前置（如 nvm 的 bin），解决系统 node 过旧；**不自动安装 Node** |
+| 启动语法 | `--profile <p> web --host …`（0.2.1 世代语法） | **rc.3 语法** `--profile <p> --host … --port … --no-open`（`web` 位置参数在 rc.3 会被拒绝） |
+| 进程检测 | pgrep 仅匹配 `web` 位置参数 | 同时匹配 rc.3 形态（`--host`/`--port` 跟随 `--profile`），同 profile 冲突保护与 PID 报告继续有效 |
+| 版本判定 | 浏览器可传版本，fallback `0.2.1-rc.3` | **宿主侧**从 `profileContext.installAnchor` 解析真实版本，钉死 `0.2.2-rc.3`，不符返回 409 |
+| token 处理 | 无 token 时重启服务取回 | 候选 token 经**真实 303 + Set-Cookie 交换**验证；401 重读重试一次；不可读 → 人工处理，不重启 |
+| 配置同步 | 把本机插件 / provider / API Key 同步到远端 profile 与 `.env` | **删除**；远端复用服务器自己的 `~/.dsh`、profile、模型与插件 |
+| 主题 | 硬编码白底 + `inherit` 文字（深色主题下白底浅字不可读） | 全部改用 `--dsw-alias-*` 主题 token，深 / 浅色自适应 |
+| 会话策略 | 每主机一条会话 | **单活会话** + generation 计数防连接竞态；切主机先断旧会话 |
+| 本机存储 | `remote-dsh.json`（密码明文，0600） | `remote-dsh-openssh.json`（0600 原子写入，**仅非敏感字段**） |
+| 启动日志 | 复用 / 截断 `~/.dsh/logs/dsh-web.log` | 写入自有 logs 目录下**全新唯一**文件（`umask 077`），绝不截断已有日志 |
+| 并发启动 | 无锁 | 远端原子 `mkdir` 启动锁，防并发拉起两个实例；锁不自动清除 |
+
+### 试点中修复的基线缺陷
+
+在 kiaa206 真机验收中发现并修复，**每项均含回归测试**（全套 121 个测试通过）：
+
+1. **webLog 空值被拒**：设置编辑器把空的「自动」输入框作为 `''` 发送，服务端契约要求 `null` → 客户端 trim 后送 `null`，服务端也防御性归一化。
+2. **attach 误检 Node**：接管已有实例时错误地检查远端默认 Node 版本（系统 node 过旧但运行中的 DSH 用 nvm）→ Node 检查移到 install-and-start 分支，attach 不再探测默认 node。
+3. **重挂载后 ssh2 加载失败**：插件禁用/启用重挂载后 bare `import('ssh2')` 解析到不可用的命名空间 → 改为 `createRequire` 多路径回退（模块路径 → profile node_modules → ESM import）。
+4. **`command -v` 内建失效**：`env PATH=… command -v npm` 把 shell 内建 `command` 当外部程序执行而静默返回空 → 包进 `sh -c`。
+5. **rc.3 启动语法**：`--profile <p> web …` 被 rc.3 拒绝（"too many arguments"）→ 去掉 `web` 位置参数，并更新进程检测正则以匹配 rc.3 形态。
+6. **深色主题不可读**：面板硬编码白底而文字继承应用浅色 → 全部改用主题 token。
+
+### 保留自上游
+
+iframe 嵌入 + 本机网关（cookie 换取、HTTP / WebSocket 转发、Host/Origin/Referer 重写、Esc 桥接、401 单次重试）、SFTP 双列文件传输（上传 / 下载 / 改名 / 删除 / 新建 / 文本编辑）、放大 / 在新窗口打开 / 重新加载、阶段化连接进度与耗时显示。
 
 ## 安全模型
 
@@ -108,6 +141,8 @@ dsh plugin --profile desktop add link:$(pwd)
 ## English summary
 
 A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. One active session at a time; the two-pane SFTP transfer view is kept from upstream. Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
+
+**Versus upstream 0.3.0**, this fork additionally: resolves the effective SSH config via `ssh -G` and verifies host keys against `known_hosts` (fail-closed); adds an optional per-host `nodeBin` so an existing nvm Node is used without auto-installing Node; launches with rc.3-correct syntax (`--profile <p> --host … --port …`, no `web` positional) and detects both process forms; resolves the DSH version host-side from `profileContext.installAnchor`; validates launch tokens with a real 303+cookie exchange; styles the panel with `--dsw-alias-*` theme tokens (readable in dark theme); and removes config sync, password hosts, and every auto-kill/restart path. The full comparison table and the six bugs fixed during the real-server pilot (each with a regression test, 121 tests total) are in the Chinese section 「与上游原版的差异」 above.
 
 ## 许可
 
