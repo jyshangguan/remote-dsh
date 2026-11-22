@@ -197,6 +197,29 @@ test('attach: alive port + valid token builds the gateway with no install/spawn'
   assert.ok(client.ended >= 1)
 })
 
+test('attach ignores the remote default Node version (running server has its own runtime)', async () => {
+  // Real-world case: the remote login shell's `node` is an old system build
+  // (v12) while the running dsh web uses nvm's v24. Attaching must not check
+  // the default node at all — only install-and-start needs it.
+  const client = fakeClient([
+    probeReply('200'),
+    pgrepReply(row(1234, 1700000000, LIVE_ARGS) + '\n'),
+    portReply('1'),
+    lsReply([OUR_LOG]),
+    grepReply(path => path === OUR_LOG_PATH ? ['attachtok'] : []),
+  ])
+  const { deps, state } = makeDeps(client, { verdicts: { attachtok: COOKIE } })
+  const session = await openSession(ENTRY, { version: '0.3.0', deps })
+  assert.match(session.proxyUrl, /^http:\/\/127\.0\.0\.1:\d+\/$/)
+  assert.deepEqual(state.tokensReturned, ['attachtok'])
+  for (const command of client.commands) {
+    assert.ok(!/^node -v/.test(command), 'attach must not probe the default node: ' + command)
+    assert.ok(!/npm|nohup|mkdir|rm -rf|test -e|--version|\.lock/i.test(command), 'mutating command in attach: ' + command)
+  }
+  assertNoKill(client.commands)
+  await session.close()
+})
+
 test('existing web + no valid token -> ManualActionRequired, never a restart', async () => {
   const client = fakeClient([
     nodeReply(),
