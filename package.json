@@ -1,19 +1,25 @@
 {
-  "name": "dsh-remote-panel-ssh",
-  "version": "0.3.0",
-  "description": "Embed a remote DeepSeek Harness inside the desktop app, sync local plugins and model providers to it, and move files between this machine and the remote over SFTP: SSH bootstrap, on-demand remote dsh install, loopback tunnel, same-machine gateway, guided sync and a two-pane file transfer view.",
+  "name": "dsh-remote-panel-openssh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "在桌面端 DSH 内通过 OpenSSH 直连嵌入远端完整 DSH 界面：安全接管、侧装匹配运行时、绝不静默重启。Embed the full remote DSH GUI in Desktop over OpenSSH: safe attach, side-installed runtime, no silent restarts.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   },
   "files": [
-    "lib/**/*.js",
+    "lib",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "locale",
+    "icon.svg",
+    "docs"
   ],
   "keywords": [
     "deepseek-harness",
@@ -21,18 +27,19 @@
     "dsh-plugin",
     "cordis",
     "ssh",
+    "openssh",
     "sftp",
     "remote",
-    "panel",
-    "sync"
+    "panel"
   ],
   "license": "Apache-2.0",
+  "icon": "./icon.svg",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/1583477320/remote-dsh.git"
+    "url": "git+https://github.com/jyshangguan/dsh-remote-panel-ssh.git"
   },
   "bugs": {
-    "url": "https://github.com/1583477320/remote-dsh/issues"
+    "url": "https://github.com/jyshangguan/dsh-remote-panel-ssh/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -42,7 +49,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.2.1-rc.3"
+      "dsh": "0.2.2-rc.3"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
