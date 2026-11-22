@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote-panel-ssh",
-  "version": "0.1.1",
-  "description": "Embed a remote DeepSeek Harness inside the desktop app: SSH bootstrap, on-demand remote dsh install, loopback tunnel and a same-machine gateway that serves the remote UI to a panel iframe.",
+  "version": "0.3.0",
+  "description": "Embed a remote DeepSeek Harness inside the desktop app, sync local plugins and model providers to it, and move files between this machine and the remote over SFTP: SSH bootstrap, on-demand remote dsh install, loopback tunnel, same-machine gateway, guided sync and a two-pane file transfer view.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -21,8 +21,10 @@
     "dsh-plugin",
     "cordis",
     "ssh",
+    "sftp",
     "remote",
-    "panel"
+    "panel",
+    "sync"
   ],
   "license": "Apache-2.0",
   "repository": {
