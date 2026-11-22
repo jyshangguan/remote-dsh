@@ -360,6 +360,55 @@ test('fresh start: missing side runtime installs ONLY into our prefix, spawns sa
   assert.ok(client.ended >= 1)
 })
 
+test('nodeBin: install/spawn/version commands prepend the configured remote bin dir', async () => {
+  let spawned = false
+  let spawnedLogPath = ''
+  let sideCalls = 0
+  const NODEBIN = '$HOME/.nvm/versions/node/v24.13.0/bin'
+  const client = fakeClient([
+    [/node -v/, { code: 0, stdout: 'v24.13.1\n', stderr: '' }],
+    [/^curl /, () => ({ code: 0, stdout: spawned ? '200' : '000', stderr: '' })],
+    pgrepReply(),
+    portReply('0'),
+    [/node_modules\/\.bin\/dsh" --version/, () => { sideCalls++; return { code: 0, stdout: sideCalls === 1 ? '' : '0.3.0\n', stderr: '' } }],
+    [/command -v npm/, { code: 0, stdout: NODEBIN + '/npm\n', stderr: '' }],
+    installMkdirReply(),
+    npmReply(),
+    lockReply(0),
+    testEReply(1),
+    [/nohup env/, command => {
+      spawned = true
+      const match = /> "([^"]+)" 2>&1/.exec(command)
+      spawnedLogPath = match === null ? '' : match[1]
+      return { code: 0, stdout: '4242\n', stderr: '' }
+    }],
+    pidMarkerReply(),
+    rmReply(),
+    [/^ls -1t/, () => ({ code: 0, stdout: spawnedLogPath === '' ? '' : spawnedLogPath.split('/').pop() + '\n', stderr: '' })],
+    grepReply(path => path === spawnedLogPath ? ['nvtok'] : []),
+    tailReply(),
+  ])
+  const { deps } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const entry = { ...ENTRY, nodeBin: '~/.nvm/versions/node/v24.13.0/bin' }
+  const session = await openSession(entry, { version: '0.3.0', deps })
+  const commands = client.commands
+
+  // node/npm/version probes carry the explicit PATH prefix.
+  const nodeProbe = commands.find(c => /node -v/.test(c))
+  assert.ok(nodeProbe.startsWith('env PATH="' + NODEBIN + ':$PATH"'), 'node probe not prefixed: ' + nodeProbe)
+  const npm = commands.find(c => /npm i --prefix/.test(c))
+  assert.ok(npm.startsWith('env PATH="' + NODEBIN + ':$PATH"'), 'npm install not prefixed: ' + npm)
+  const versionProbe = commands.find(c => /node_modules\/\.bin\/dsh" --version/.test(c))
+  assert.ok(versionProbe.startsWith('env PATH="' + NODEBIN + ':$PATH"'), 'version probe not prefixed: ' + versionProbe)
+
+  // Spawn PATH puts the side runtime first, then nodeBin, then the login PATH.
+  const spawn = commands.find(c => /nohup env/.test(c))
+  assert.ok(spawn.includes('PATH="' + RUNTIME + '/node_modules/.bin:' + NODEBIN + ':$PATH"'), 'spawn PATH wrong: ' + spawn)
+  assert.ok(spawn.includes('DSH_HOME="$HOME/.dsh"'))
+  assertNoKill(commands)
+  await session.close()
+})
+
 test('lock contention + web now alive -> attach, never removes the lock', async () => {
   let probeCalls = 0
   const client = fakeClient([

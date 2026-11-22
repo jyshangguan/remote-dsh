@@ -76,6 +76,7 @@ dsh plugin --profile desktop add link:$(pwd)
 | `webPort` | 远端 `dsh web` 监听端口，1–65535，默认 `18080` |
 | `profile` | 远端 DSH profile 名称，默认 `web`（复用服务器该 profile 的插件与模型配置） |
 | `webLog` | 已有实例的日志路径，可选（绝对路径或 `~/` 开头）；用于从外部启动的实例读取 token。留空时按顺序尝试：本插件自己的日志目录、`~/.dsh/logs/dsh-web.log`、`~/.dsh/dsh-web.log` |
+| `nodeBin` | 远端 Node bin 目录，可选（如 `~/.nvm/versions/node/v24.13.0/bin`）。设置后，安装/启动/版本探测都用该目录的 node/npm（PATH 前置），解决远端默认 node 过旧但 nvm 里有合适版本的情况；留空用远端默认 PATH。不会自动安装 Node |
 | `installProxy` | 侧装时使用的 HTTP 代理，可选（如 `http://127.0.0.1:7890`） |
 
 设置保存在 `$DSH_HOME/remote-dsh-openssh.json`（0600，原子写入），只含上述非敏感字段；不会改动 `~/.ssh/config`、`dsh-ssh.json` 或任何凭据。

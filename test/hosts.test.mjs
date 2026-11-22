@@ -49,7 +49,7 @@ function writeStoreRaw(content) {
 
 describe('DEFAULT_SETTINGS', () => {
   it('matches the documented defaults', () => {
-    assert.deepEqual(DEFAULT_SETTINGS, { webPort: 18080, profile: 'web', webLog: null, installProxy: '' })
+    assert.deepEqual(DEFAULT_SETTINGS, { webPort: 18080, profile: 'web', webLog: null, nodeBin: '', installProxy: '' })
   })
 })
 
@@ -58,8 +58,8 @@ describe('listHosts', () => {
     writeStoreRaw(JSON.stringify({ version: 2, hosts: { alpha: { webPort: 19090, profile: 'dev' } } }))
     const hosts = await listHosts(makeDeps(['alpha', 'beta']))
     assert.deepEqual(hosts, [
-      { id: 'openssh:alpha', alias: 'alpha', label: 'alpha', source: 'openssh', webPort: 19090, profile: 'dev', webLog: null, installProxy: '' },
-      { id: 'openssh:beta', alias: 'beta', label: 'beta', source: 'openssh', webPort: 18080, profile: 'web', webLog: null, installProxy: '' },
+      { id: 'openssh:alpha', alias: 'alpha', label: 'alpha', source: 'openssh', webPort: 19090, profile: 'dev', webLog: null, nodeBin: '', installProxy: '' },
+      { id: 'openssh:beta', alias: 'beta', label: 'beta', source: 'openssh', webPort: 18080, profile: 'web', webLog: null, nodeBin: '', installProxy: '' },
     ])
   })
 
@@ -106,7 +106,7 @@ describe('resolveHost', () => {
     const entry = await resolveHost('openssh:alpha', makeDeps(['alpha']))
     assert.deepEqual(entry, {
       id: 'openssh:alpha', alias: 'alpha', label: 'alpha', source: 'openssh',
-      webPort: 19001, profile: 'lab', webLog: null, installProxy: '',
+      webPort: 19001, profile: 'lab', webLog: null, nodeBin: '', installProxy: '',
     })
   })
 
@@ -168,6 +168,19 @@ describe('saveSettings', () => {
     assert.equal((await saveSettings('alpha', { webLog: '~/logs/dsh-web.log' }, deps)).webLog, '~/logs/dsh-web.log')
   })
 
+  it('validates nodeBin: empty, absolute, or ~/ dir only', async () => {
+    for (const nodeBin of ['relative/bin', '~x', 'http://x/y', 42]) {
+      await assert.rejects(() => saveSettings('alpha', { nodeBin }, makeDeps(['alpha'])), error => {
+        assert.equal(error.code, 'invalid-settings')
+        return true
+      })
+    }
+    const deps = makeDeps(['alpha'])
+    assert.equal((await saveSettings('alpha', { nodeBin: '' }, deps)).nodeBin, '')
+    assert.equal((await saveSettings('alpha', { nodeBin: null }, deps)).nodeBin, '')
+    assert.equal((await saveSettings('alpha', { nodeBin: '~/.nvm/versions/node/v24.13.0/bin' }, deps)).nodeBin, '~/.nvm/versions/node/v24.13.0/bin')
+  })
+
   it('validates installProxy as a trimmed http(s) URL or empty string', async () => {
     for (const installProxy of ['ftp://x/y', 'not a url', 'http://', 'socks5://127.0.0.1:1080', 42]) {
       await assert.rejects(() => saveSettings('alpha', { installProxy }, makeDeps(['alpha'])), error => {
@@ -185,7 +198,7 @@ describe('saveSettings', () => {
     const deps = makeDeps(['alpha'])
     await saveSettings('alpha', { webPort: 19010 }, deps)
     const settings = await saveSettings('alpha', { profile: 'dev' }, deps)
-    assert.deepEqual(settings, { webPort: 19010, profile: 'dev', webLog: null, installProxy: '' })
+    assert.deepEqual(settings, { webPort: 19010, profile: 'dev', webLog: null, nodeBin: '', installProxy: '' })
     const stored = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
     assert.deepEqual(stored.hosts.alpha, settings)
   })
@@ -209,7 +222,7 @@ describe('saveSettings', () => {
     assert.equal(fs.statSync(dshHome).mode & 0o777, 0o700)
     const stored = JSON.parse(fs.readFileSync(storeFile(), 'utf8'))
     assert.equal(stored.version, 2)
-    assert.deepEqual(stored.hosts.alpha, { webPort: 19020, profile: 'web', webLog: null, installProxy: '' })
+    assert.deepEqual(stored.hosts.alpha, { webPort: 19020, profile: 'web', webLog: null, nodeBin: '', installProxy: '' })
   })
 
   it('rewrites a corrupt store only on the next successful save', async () => {
