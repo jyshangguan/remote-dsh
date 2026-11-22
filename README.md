@@ -4,7 +4,7 @@
 
 这是一个**安全优先的 fork**：只接管、不破坏。远端已有的 DSH 进程绝不会被静默结束或重启；无法安全接管时，插件会把原因和处理建议摆在你面前，由你决定。
 
-> 仓库说明：`jyshangguan/dsh-remote-panel-ssh` 目前是 fork 的临时落脚点，后续可能迁移；以实际发布地址为准。
+> 仓库说明：本仓库是 [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) 的 fork，发布在 [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh)，工作分支 `openssh-safe-panel`。包名 `dsh-remote-panel-openssh` 与上游 `dsh-remote-panel-ssh` 区分，可共存。
 
 ## 来源与许可
 
@@ -107,7 +107,7 @@ dsh plugin --profile desktop add link:$(pwd)
 
 ## English summary
 
-A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. One active session at a time; the two-pane SFTP transfer view is kept from upstream. The repository URL is a placeholder fork home and may move.
+A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. One active session at a time; the two-pane SFTP transfer view is kept from upstream. Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
 
 ## 许可
 

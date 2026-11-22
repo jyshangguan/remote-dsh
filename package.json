@@ -36,10 +36,10 @@
   "icon": "./icon.svg",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jyshangguan/dsh-remote-panel-ssh.git"
+    "url": "git+https://github.com/jyshangguan/remote-dsh.git"
   },
   "bugs": {
-    "url": "https://github.com/jyshangguan/dsh-remote-panel-ssh/issues"
+    "url": "https://github.com/jyshangguan/remote-dsh/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
