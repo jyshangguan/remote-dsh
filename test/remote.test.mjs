@@ -424,6 +424,184 @@ test('nodeBin: install/spawn/version commands prepend the configured remote bin 
   await session.close()
 })
 
+// ---------------------------------------------------------------------------
+// Node auto-discovery: nvm/fnm/... only load in interactive shells, so the
+// non-interactive PATH node can be an old system one while the user's login
+// shell has a supported Node. Discovery rescues the connect.
+
+/**
+ * Full install-and-start script where the default PATH node fails the check
+ * and discovery must rescue the connect. `paths` are the listed candidates,
+ * `versions` map candidate node path -> `node -v` output, `prefixedNode` is
+ * what PATH-prefixed probes report once a candidate is chosen.
+ */
+function discoveryFlow({ defaultNode = 'v18.19.1', home = '/home/u', paths = [], versions = {}, prefixedNode = 'v24.22.2' } = {}) {
+  const state = { spawned: false, spawnedLogPath: '', sideCalls: 0 }
+  const script = [
+    [/^node -v/, { code: 0, stdout: defaultNode === '' ? '' : defaultNode + '\n', stderr: '' }],
+    [/-maxdepth/, { code: 0, stdout: [home, ...paths].join('\n') + '\n', stderr: '' }],
+    [/bin\/node" -v/, command => {
+      const match = /"([^"]+)" -v/.exec(command)
+      const version = match === null ? undefined : versions[match[1]]
+      return { code: 0, stdout: version === undefined ? '' : version + '\n', stderr: '' }
+    }],
+    [/node -v/, { code: 0, stdout: prefixedNode + '\n', stderr: '' }],
+    [/^curl /, () => ({ code: 0, stdout: state.spawned ? '200' : '000', stderr: '' })],
+    pgrepReply(),
+    portReply('0'),
+    [/node_modules\/\.bin\/dsh" --version/, () => { state.sideCalls++; return { code: 0, stdout: state.sideCalls === 1 ? '' : '0.3.0\n', stderr: '' } }],
+    [/command -v npm/, { code: 0, stdout: '/usr/bin/npm\n', stderr: '' }],
+    installMkdirReply(),
+    npmReply(),
+    lockReply(0),
+    testEReply(1),
+    [/nohup env/, command => {
+      state.spawned = true
+      const match = /> "([^"]+)" 2>&1/.exec(command)
+      state.spawnedLogPath = match === null ? '' : match[1]
+      return { code: 0, stdout: '4242\n', stderr: '' }
+    }],
+    pidMarkerReply(),
+    rmReply(),
+    [/^ls -1t/, () => ({ code: 0, stdout: state.spawnedLogPath === '' ? '' : state.spawnedLogPath.split('/').pop() + '\n', stderr: '' })],
+    grepReply(path => path === state.spawnedLogPath ? ['nvtok'] : []),
+    tailReply(),
+  ]
+  return { script, state }
+}
+
+test('node discovery: unsupported default node falls back to an nvm node end-to-end', async () => {
+  const NVM = '/home/u/.nvm/versions/node/v24.22.2/bin'
+  const flow = discoveryFlow({ paths: [NVM + '/node'], versions: { [NVM + '/node']: 'v24.22.2' } })
+  const client = fakeClient(flow.script)
+  const resolved = []
+  const { deps } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const session = await openSession(ENTRY, {
+    version: '0.3.0', deps,
+    onNodeBinResolved: async dir => { resolved.push(dir) },
+  })
+  const commands = client.commands
+
+  // Bare check first, then the read-only listing and the candidate probe.
+  assert.ok(commands.includes('node -v 2>/dev/null'), 'bare default node probe missing')
+  const listing = commands.find(c => /-maxdepth/.test(c))
+  assert.ok(listing !== undefined && listing.includes('find '), 'discovery listing missing')
+  // No unquoted glob: zsh aborts a whole command whose glob has no matches
+  // (the remote login shell may be zsh, e.g. the KIAA servers).
+  assert.ok(!listing.replace(/'[^']*'/g, '').includes('*'), 'unquoted glob in listing: ' + listing)
+  assert.ok(commands.includes('"' + NVM + '/node" -v 2>/dev/null'), 'candidate probe missing')
+
+  // The discovered bin dir is reported to the caller in ~/ form for the store.
+  assert.deepEqual(resolved, ['~/.nvm/versions/node/v24.22.2/bin'])
+
+  // Everything downstream carries the discovered PATH prefix.
+  const npm = commands.find(c => /npm i --prefix/.test(c))
+  assert.ok(npm.startsWith('env PATH="' + NVM + ':$PATH"'), 'npm install not prefixed: ' + npm)
+  const versionProbe = commands.find(c => /node_modules\/\.bin\/dsh" --version/.test(c))
+  assert.ok(versionProbe.startsWith('env PATH="' + NVM + ':$PATH"'), 'version probe not prefixed: ' + versionProbe)
+  const spawn = commands.find(c => /nohup env/.test(c))
+  assert.ok(spawn.includes('PATH="' + RUNTIME + '/node_modules/.bin:' + NVM + ':$PATH"'), 'spawn PATH wrong: ' + spawn)
+  assertNoKill(commands)
+  await session.close()
+})
+
+test('node discovery: probes newest-looking candidates first and picks the highest supported', async () => {
+  const V20 = '/home/u/.nvm/versions/node/v20.1.0/bin'
+  const V22 = '/home/u/.nvm/versions/node/v22.19.0/bin'
+  const V23 = '/home/u/.nvm/versions/node/v23.5.0/bin'
+  const V24 = '/home/u/.nvm/versions/node/v24.22.2/bin'
+  const flow = discoveryFlow({
+    // Glob order: oldest-looking first on purpose.
+    paths: [V20 + '/node', V22 + '/node', V23 + '/node', V24 + '/node'],
+    versions: { [V20 + '/node']: 'v20.1.0', [V22 + '/node']: 'v22.19.0', [V23 + '/node']: 'v23.5.0', [V24 + '/node']: 'v24.22.2' },
+  })
+  const client = fakeClient(flow.script)
+  const resolved = []
+  const { deps } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const session = await openSession(ENTRY, {
+    version: '0.3.0', deps,
+    onNodeBinResolved: async dir => { resolved.push(dir) },
+  })
+  const commands = client.commands
+  // v23 is outside the supported range (^22.19 || >=24) and must never win,
+  // even though it sorts above v22 in the listing.
+  const npm = commands.find(c => /npm i --prefix/.test(c))
+  assert.ok(npm.startsWith('env PATH="' + V24 + ':$PATH"'), 'did not pick the highest supported: ' + npm)
+  assert.deepEqual(resolved, ['~/.nvm/versions/node/v24.22.2/bin'])
+  assertNoKill(commands)
+  await session.close()
+})
+
+test('node discovery: nothing usable -> enriched error, no spawn, no callback', async () => {
+  const client = fakeClient([
+    [/^node -v/, { code: 0, stdout: 'v18.19.1\n', stderr: '' }],
+    [/-maxdepth/, { code: 0, stdout: '/home/u\n', stderr: '' }],
+    probeReply('000'), pgrepReply(), portReply('0'),
+  ])
+  const resolved = []
+  const { deps } = makeDeps(client)
+  await assert.rejects(openSession(ENTRY, {
+    version: '0.3.0', deps,
+    onNodeBinResolved: async dir => { resolved.push(dir) },
+  }), error => {
+    assert.match(error.message, /版本不满足要求/)
+    assert.match(error.message, /自动搜索/)
+    assert.match(error.message, /nodeBin/)
+    return true
+  })
+  assert.deepEqual(resolved, [])
+  assert.ok(!client.commands.some(c => /nohup|npm i/.test(c)), 'spawned or installed despite no node')
+  assertNoKill(client.commands)
+  assert.ok(client.ended >= 1)
+})
+
+test('node discovery: missing default node with empty managers -> missing-node error with hint', async () => {
+  const client = fakeClient([probeReply('000'), pgrepReply(), portReply('0')])
+  const { deps } = makeDeps(client)
+  await assert.rejects(openSession(ENTRY, { version: '0.3.0', deps }), error => {
+    assert.match(error.message, /远端没有 Node\.js/)
+    assert.match(error.message, /自动搜索/)
+    return true
+  })
+  assertNoKill(client.commands)
+})
+
+test('node discovery: a failing onNodeBinResolved callback never breaks the connect', async () => {
+  const NVM = '/home/u/.nvm/versions/node/v24.22.2/bin'
+  const flow = discoveryFlow({ paths: [NVM + '/node'], versions: { [NVM + '/node']: 'v24.22.2' } })
+  const client = fakeClient(flow.script)
+  const { deps } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const session = await openSession(ENTRY, {
+    version: '0.3.0', deps,
+    onNodeBinResolved: async () => { throw new Error('store busy') },
+  })
+  assert.ok(client.commands.some(c => /npm i --prefix/.test(c) && c.startsWith('env PATH="' + NVM + ':$PATH"')))
+  assertNoKill(client.commands)
+  await session.close()
+})
+
+test('probeHost reports the node a connect would use (discovered when the default is old)', async () => {
+  const NVM = '/home/u/.nvm/versions/node/v24.22.2/bin'
+  const client = fakeClient([
+    [/^node -v/, { code: 0, stdout: 'v18.19.1\n', stderr: '' }],
+    [/-maxdepth/, { code: 0, stdout: '/home/u\n' + NVM + '/node\n', stderr: '' }],
+    [/bin\/node" -v/, { code: 0, stdout: 'v24.22.2\n', stderr: '' }],
+    sideReply('0.3.0'), probeReply('200'),
+    pgrepReply(row(1234, 1700000000, LIVE_ARGS) + '\n'), portReply('1'),
+    lsReply([OUR_LOG]), grepReply(path => path === OUR_LOG_PATH ? ['tok'] : []),
+  ])
+  const { deps } = makeDeps(client)
+  const result = await probeHost(ENTRY, '0.3.0', deps)
+  assert.equal(result.node, 'v24.22.2')
+  assert.equal(result.nodeSource, 'discovered')
+  assert.equal(result.nodeBin, NVM)
+  // The side-runtime version probe used the discovered PATH prefix.
+  assert.ok(client.commands.some(c => c.startsWith('env PATH="' + NVM + ':$PATH" ')), 'side probe not prefixed')
+  assertReadOnly(client.commands)
+  assertNoKill(client.commands)
+  assert.ok(client.ended >= 1)
+})
+
 test('lock contention + web now alive -> attach, never removes the lock', async () => {
   let probeCalls = 0
   const client = fakeClient([

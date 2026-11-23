@@ -22,7 +22,7 @@
 | 主机指纹 | 未见 `known_hosts` 校验 | `ssh-keygen -F` 校验 `known_hosts`（普通/hashed 均可）；未知 / 变更 / 撤销 / CA 一律 **fail-closed**，不写 known_hosts、不做静默 TOFU |
 | 远端进程 | 旧进程**自动 kill 重启**、无 token **自动重启取回** | **绝不 kill / restart / signal**；无法安全接管 → 「需人工处理」卡片（原因 + 建议 + PID + 重试） |
 | 安装位置 | `npm i -g --prefix "$HOME/.local"`（覆盖 `~/.local/bin/dsh`） | 侧装到 `~/.local/share/dsh-remote-panel-openssh/runtime/<版本>/`（`npm i --prefix`），不碰全局 prefix 与已有 `dsh` |
-| Node 选择 | 远端默认 PATH 的 node/npm | 可选 **`nodeBin`** 前置（如 nvm 的 bin），解决系统 node 过旧；**不自动安装 Node** |
+| Node 选择 | 远端默认 PATH 的 node/npm | 默认 PATH 不满足时**自动搜索** nvm/fnm/asdf/volta/n 并记住（只找不装）；也可手动 **`nodeBin`** 前置；**不自动安装 Node** |
 | 启动语法 | `--profile <p> web --host …`（0.2.1 世代语法） | **rc.3 语法** `--profile <p> --host … --port … --no-open`（`web` 位置参数在 rc.3 会被拒绝） |
 | 进程检测 | pgrep 仅匹配 `web` 位置参数 | 同时匹配 rc.3 形态（`--host`/`--port` 跟随 `--profile`），同 profile 冲突保护与 PID 报告继续有效 |
 | 版本判定 | 浏览器可传版本，fallback `0.2.1-rc.3` | **宿主侧**从 `profileContext.installAnchor` 解析真实版本，钉死 `0.2.2-rc.3`，不符返回 409 |
@@ -104,7 +104,7 @@ dsh plugin --profile desktop add link:$(pwd)
    ```
 
    动作含义：`可直接接管` / `将侧装并启动` / `需人工处理：<原因>`；
-5. 点 **连接**，阶段依次为：`SSH → 检查环境 → 侧装（如需，首次可能几分钟）→ 启动 dsh web → 建立通道`，每一步都有文字与耗时；
+5. 点 **连接**，阶段依次为：`SSH → 检查环境 →（默认 Node 不满足时）查找可用 Node → 侧装（如需，首次可能几分钟）→ 启动 dsh web → 建立通道`，每一步都有文字与耗时；
 6. 连上后：**文件**（SFTP 双列传输）/ **重新加载** / **放大**（`Esc` 退出）/ **在新窗口打开** / **断开**；每台主机还有 **隐藏**（见下）；
 7. 远端 DSH 是独立登录态，第一次需要在那套界面里登录一次。
 
@@ -123,7 +123,7 @@ dsh plugin --profile desktop add link:$(pwd)
 | `webPort` | 远端 `dsh web` 监听端口，1–65535，默认 `18080` |
 | `profile` | 远端 DSH profile 名称，默认 `web`（复用服务器该 profile 的插件与模型配置） |
 | `webLog` | 已有实例的日志路径，可选（绝对路径或 `~/` 开头）；用于从外部启动的实例读取 token。留空时按顺序尝试：本插件自己的日志目录、`~/.dsh/logs/dsh-web.log`、`~/.dsh/dsh-web.log` |
-| `nodeBin` | 远端 Node bin 目录，可选（如 `~/.nvm/versions/node/v24.13.0/bin`）。设置后，安装/启动/版本探测都用该目录的 node/npm（PATH 前置），解决远端默认 node 过旧但 nvm 里有合适版本的情况；留空用远端默认 PATH。不会自动安装 Node |
+| `nodeBin` | 远端 Node bin 目录，可选（如 `~/.nvm/versions/node/v24.13.0/bin`）。设置后，安装/启动/版本探测都用该目录的 node/npm（PATH 前置）。留空时先用远端默认 PATH：nvm 等版本管理器只随交互式 shell 加载，非交互 SSH 往往只看到旧的系统 node，因此默认 Node 缺失或过旧时会**自动**在 nvm/fnm/asdf/volta/n 与 `~/.local/bin` 中查找满足要求的 Node（只查找，绝不安装），找到后本次即用并自动写入本字段，下次直接使用（nvm 升级后旧路径失效也会同样自愈）；找不到时错误信息会提示手动填写。不会自动安装 Node |
 | `installProxy` | 侧装时使用的 HTTP 代理，可选（如 `http://127.0.0.1:7890`） |
 
 设置保存在 `$DSH_HOME/remote-dsh-openssh.json`（0600，原子写入），只含上述非敏感字段；不会改动 `~/.ssh/config`、`dsh-ssh.json` 或任何凭据。
@@ -136,7 +136,7 @@ dsh plugin --profile desktop add link:$(pwd)
 
 - **真正断开后不自动重连**：会话断开后显示「远端连接已断开，请重新连接」，需手动重试。切换面板不算断开——远端画面与会话保活，回到面板即恢复（见「使用」）。
 - **多会话并发**：可同时连接多台服务器，各自保持独立的 SSH 会话与内嵌画面；顶部标签栏点标签即切换（不重建、不重载），**「+」** 打开服务器列表添加新服务器，列表里已连接主机点 **进入** 切换。每台已连接主机占用一条 SSH 连接 + 一个本机网关 + 一个保活内嵌画面，资源随连接数线性增长，用 **断开** 管理数量。对已连接主机重复点「进入/连接」直接接管现有会话。
-- **首次侧装依赖远端环境**：远端需要已安装 Node.js（满足 DSH 的 engines 要求）与 npm；侧装过程可能需要几分钟。
+- **首次侧装依赖远端环境**：远端需要有满足 DSH engines 要求的 Node（在默认 PATH 或 nvm/fnm/asdf/volta/n 等常见版本管理器中任一处即可，插件会自动查找，但不会代为安装）与 npm；侧装过程可能需要几分钟。
 - 首版不做配置同步；主机完全由 `~/.ssh/config` 管理（只读）。面板内可隐藏/恢复主机（仅影响面板显示，存于插件设置文件）；连接中的主机需先断开才能隐藏。
 - 在线编辑写入上限 2 MB；目录传输暂不支持。
 
@@ -148,6 +148,7 @@ dsh plugin --profile desktop add link:$(pwd)
 | 私钥带口令，连接失败 | `ssh-add ~/.ssh/id_ed25519` 把钥匙交给 agent，再连接 |
 | 需人工处理：端口被非 DSH 进程占用 | 按卡片给出的 PID 人工确认并处理该进程，再点重试 |
 | 需人工处理：已有 dsh web 无法安全接管 / token 不可读 | 人工检查远端服务与日志（卡片会给出建议），处理后重试；插件不会替你重启 |
+| 远端 Node 版本不满足要求 | 连接时会自动在 nvm/fnm/asdf/volta/n 中查找可用 Node 并记住；若仍报错，在主机「设置」的 `nodeBin` 手动填远端 Node bin 目录（如 `~/.nvm/versions/node/v24.22.2/bin`） |
 | 409「本插件首版仅支持 DSH 0.2.2-rc.3」 | 本机 DSH 版本不符；切换到受支持版本后再用 |
 | 列表为空 | 在 `~/.ssh/config` 里配置 `Host` 条目后点「刷新」 |
 | 连接中断、页面卡住 | 点「重试」手动重连；反复出现时检查远端 `dsh web` 日志 |
@@ -156,7 +157,7 @@ dsh plugin --profile desktop add link:$(pwd)
 
 A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from npm (`dsh plugin --profile desktop add dsh-remote-panel-openssh`, or Plugins → Add plugin → the npm name); for local development use `link:$(pwd)`. See `docs/DEVELOPMENT.md` for architecture and release notes. Configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. Multiple servers stay connected concurrently, each with its own kept-alive embedded view; a top tab bar switches between them (one tab per connected server, no reload), and a "+" tab opens the server list to add another (connected hosts are marked and offer 进入/enter, never a repeat connection). The two-pane SFTP transfer view is kept from upstream. Switching to another panel keeps every remote session AND its exact embedded view alive (returning restores it without reconnecting; a full page refresh re-adopts the live sessions), and hosts can be hidden/restored in the panel without ever touching `~/.ssh/config` (connected hosts must be disconnected first). Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
 
-**Versus upstream 0.3.0**, this fork additionally: resolves the effective SSH config via `ssh -G` and verifies host keys against `known_hosts` (fail-closed); adds an optional per-host `nodeBin` so an existing nvm Node is used without auto-installing Node; launches with rc.3-correct syntax (`--profile <p> --host … --port …`, no `web` positional) and detects both process forms; resolves the DSH version host-side from `profileContext.installAnchor`; validates launch tokens with a real 303+cookie exchange; styles the panel with `--dsw-alias-*` theme tokens (readable in dark theme); and removes config sync, password hosts, and every auto-kill/restart path. The full comparison table and the six bugs fixed during the real-server pilot (each with a regression test, 121 tests total) are in the Chinese section 「与上游原版的差异」 above.
+**Versus upstream 0.3.0**, this fork additionally: resolves the effective SSH config via `ssh -G` and verifies host keys against `known_hosts` (fail-closed); adds an optional per-host `nodeBin`, plus auto-discovery of a usable Node in nvm/fnm/asdf/volta/n when the default PATH node is missing or too old (nvm only loads in interactive shells) — the find is used for the session and persisted to the host's settings, self-healing a stale path the same way — while never auto-installing Node; launches with rc.3-correct syntax (`--profile <p> --host … --port …`, no `web` positional) and detects both process forms; resolves the DSH version host-side from `profileContext.installAnchor`; validates launch tokens with a real 303+cookie exchange; styles the panel with `--dsw-alias-*` theme tokens (readable in dark theme); and removes config sync, password hosts, and every auto-kill/restart path. The full comparison table and the six bugs fixed during the real-server pilot (each with a regression test, 121 tests total) are in the Chinese section 「与上游原版的差异」 above.
 
 ## 许可
 

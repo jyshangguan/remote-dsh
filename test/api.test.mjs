@@ -326,6 +326,24 @@ test('connect: a generic openSession error lands in failed with the message', as
   await app.closeAll()
 })
 
+test('connect persists an auto-discovered nodeBin into the host settings', async () => {
+  const { app, state } = makeHarness()
+  const DISCOVERED = '~/.nvm/versions/node/v24.22.2/bin'
+  // Simulate what the real openSession does after a successful discovery.
+  state.openImpl = async (entry, options, makeSession) => {
+    assert.equal(typeof options.onNodeBinResolved, 'function', 'onNodeBinResolved not wired')
+    await options.onNodeBinResolved(DISCOVERED)
+    return makeSession(entry).session
+  }
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'ready')
+  assert.deepEqual(state.saveCalls, [{ alias: 'alpha', patch: { nodeBin: DISCOVERED } }])
+  // The saved value is visible in the host row the panel renders.
+  const row = await hostRow(app, 'openssh:alpha')
+  assert.equal(row.nodeBin, DISCOVERED)
+  await app.closeAll()
+})
+
 test('connect: a second connect for the same in-flight host returns the existing job', async () => {
   const { app, state } = makeHarness()
   const gate = deferred()

@@ -18,14 +18,14 @@
 
 1. 在 `~/.ssh/config` 配置 `Host` 条目；新机器先在终端 `ssh <alias>` 一次以确认主机指纹。
 2. 打开侧边栏「远程 DSH」，先「测试」再「连接」。
-3. 每台主机可「设置」：webPort（1–65535，默认 18080）、profile（默认 web）、webLog（已有实例的日志路径，可选）、nodeBin（远端 Node bin 目录，可选，如 nvm 的 bin；留空用默认 PATH）、installProxy（可选）。本插件启动的实例日志写入自己的 logs 目录（0600，绝不截断已有日志）。
+3. 每台主机可「设置」：webPort（1–65535，默认 18080）、profile（默认 web）、webLog（已有实例的日志路径，可选）、nodeBin（远端 Node bin 目录，可选，如 nvm 的 bin；留空先用默认 PATH，不满足要求时自动搜索 nvm/fnm/asdf/volta/n 并回填本字段）、installProxy（可选）。本插件启动的实例日志写入自己的 logs 目录（0600，绝不截断已有日志）。
 4. 连接后点「文件」进入双列传输视图；「断开」结束会话；「隐藏」把主机移出面板列表（右上角「已隐藏」可恢复）。
 
 ## 限制
 
 - 首版仅支持 DSH 0.2.2-rc.3（宿主侧版本门禁，不符返回 409）；远端仅限 Linux；仅直连 SSH，不支持 ProxyJump / ProxyCommand、SSH 证书、CA、KRL；Windows / macOS 远端未测试。
 - 真正断开后不自动重连：需手动重试（切换面板/主机不算断开，会话与画面保活）。多会话并发：连接新主机不断开已连接主机；对已连接主机重复点「进入/连接」直接接管现有会话。
-- 首次侧装需要远端已有 Node.js（满足 DSH engines 要求）与 npm，可能耗时几分钟。
+- 首次侧装需要远端已有满足 DSH engines 的 Node（默认 PATH 或 nvm/fnm/asdf/volta/n 等常见版本管理器中任一处即可，插件会自动查找，不代为安装）与 npm，可能耗时几分钟。
 - 不做配置同步；主机增删完全由 `~/.ssh/config` 管理（只读），面板内仅可隐藏/恢复显示。在线编辑写入上限 2 MB；暂不支持整目录传输。
 
 ## 常见问题
@@ -41,7 +41,7 @@
 - **主机与认证**：主机仅来自 `~/.ssh/config`（上游还支持密码添加）；认证只走 OpenSSH 公钥/agent，`ssh -G` 解析有效配置；新增 `known_hosts` 校验，未知/变更/撤销指纹一律拒绝（上游未见校验）。
 - **远端生命周期**：删除上游一切自动 kill/restart（旧进程自愈重启、无 token 重启取回）；无法安全接管时改为「需人工处理」卡片。
 - **安装隔离**：侧装到 `~/.local/share/dsh-remote-panel-openssh/runtime/<版本>/`，不覆盖 `~/.local/bin/dsh`（上游用 `npm i -g --prefix ~/.local`）。
-- **nodeBin**：新增可选远端 Node bin 目录（如 nvm），用已有合适 Node 安装/启动，不自动装 Node。
+- **nodeBin + Node 自动发现**：可选远端 Node bin 目录（如 nvm）；留空时若默认 PATH 的 Node 缺失或过旧（nvm 只随交互式 shell 加载，非交互 SSH 看不到），会只读搜索 nvm/fnm/asdf/volta/n 与 ~/.local/bin，取满足要求的最高版本用于安装/启动，并写回该主机的 nodeBin 设置（下次直接使用、路径过期同样自愈）；仍不自动装 Node。
 - **rc.3 适配**：启动用 `--profile <p> --host … --port …`（去掉上游的 `web` 位置参数，rc.3 会拒绝）；进程检测同时匹配新旧两种形态。
 - **版本门禁**：宿主侧从 `profileContext.installAnchor` 解析版本并钉死 0.2.2-rc.3（上游允许浏览器传版本）。
 - **token**：候选经真实 303+cookie 交换验证，不可读时人工处理而非重启。
