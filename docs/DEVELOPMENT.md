@@ -146,14 +146,19 @@ restored to the stage rect, active iframe `visible`, per-host text/scroll preser
 
 **Window-chrome seat (2026-11-23, "sidebar-collapsed buttons under the remote
 window").** On macOS desktop a collapsed sidebar hides its column entirely and the
-frame mounts the `shell.leading` seat (reopen + New Session, `left: 88px`, z 15) —
-*below* `shell.overlay` (z 20). The shell publishes the inherited
-`--dsh-frame-leading-clearance` (160px darwin / 84px fullscreen / 48px web drawer)
-and expects main panels that reach the top-left corner to pad by it. The plugin page
-root (TabBar + session chrome + picker) and the maximized stage therefore carry
-`paddingLeft / left: var(--dsh-frame-leading-clearance, 0px)`; the overlay needs no
-extra geometry because it tracks the stage rect. Any future full-bleed surface in
-this plugin must respect the same var, or it will cover the seat buttons again.
+frame mounts the `shell.leading` seat (reopen + New Session, `left: 88px`,
+y ≈ 11..39, z 15) — *below* `shell.overlay` (z 20). The shell publishes the
+inherited `--dsh-frame-leading-clearance` (160px darwin / 84px fullscreen /
+48px web drawer) for main panels that reach the top-left corner. Mirroring the
+local conversation's `.titleRow` pattern, only the plugin's TOP row steps aside:
+the TabBar pads its start by the var (tabs line up after those controls) and is
+40px tall, so every row below starts under the seat band; the session chrome, the
+remote stage and the picker keep the FULL width — the overlay tracks the stage
+rect, so the remote view spans x=0 while collapsed. The maximized (Esc) stage has
+no row of its own below the band, so it keeps `left: var(…)` while collapsed and
+the buttons stay reachable over the zoomed remote view. Any future full-bleed
+surface that reaches y < 40 must respect the same var, or it will cover the seat
+buttons again.
 
 ---
 
@@ -171,9 +176,11 @@ this plugin must respect the same var, or it will cover the seat buttons again.
   `postMessage`s its state. Drive: connect → switch local → assert hidden/collapsed →
   switch back → assert restored & state preserved; tab switch A→B→A zero remounts;
   non-active death prunes frame; hide/restore; reload; maximize/Esc; collapse the
-  sidebar → assert the container's left ≥ the `[data-shell-leading]` seat's right
-  and `document.elementFromPoint(seatButtonCenter)` returns the button, then reopen
-  → container returns to the open-sidebar baseline.
+  sidebar → assert the first tab sits right of the `[data-shell-leading]` seat,
+  the container spans the full width from x=0 with its top below the seat band,
+  and `document.elementFromPoint(seatButtonCenter)` returns the button; magnified
+  keeps the container's left ≥ the seat's right; reopen → container returns to
+  the open-sidebar baseline.
 - **Manual (real app):** `link:` install requires a **full quit (tray too) + reopen** to
   refresh the client bundle. Checklist: switch away/back keeps exact view; mid-install
   switch/back resumes; real drop shows failure card + retry; refresh re-adopts live
