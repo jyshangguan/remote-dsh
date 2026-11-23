@@ -72,7 +72,15 @@ iframe 嵌入 + 本机网关（cookie 换取、HTTP / WebSocket 转发、Host/Or
 
 ## 安装
 
-本 fork 未发布到 npm，从本地目录安装：
+**从 npm 安装（推荐）**：
+
+```sh
+dsh plugin --profile desktop add dsh-remote-panel-openssh
+```
+
+或在桌面应用 **插件（Plugins）→ 添加插件** 里输入 npm 包名 `dsh-remote-panel-openssh`。依赖 `ssh2` 由安装器一并装好。
+
+**从本地目录安装（开发 / 未发布改动）**：
 
 ```sh
 git clone <本仓库地址> dsh-remote-panel-ssh
@@ -80,9 +88,9 @@ cd dsh-remote-panel-ssh
 dsh plugin --profile desktop add link:$(pwd)
 ```
 
-或在桌面应用 **插件（Plugins）→ 添加插件** 里选择本仓库目录。依赖 `ssh2` 由安装器一并装好。
-
 装完**完全退出 DSH 桌面应用**（托盘也要退）再打开，左侧出现「远程 DSH」。`link:` 方式改代码后同样需要完全重启应用才会刷新客户端 bundle。
+
+开发 / 续作请先读 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)（架构、保活覆盖层的不变量、复现与测试、发布流程）。
 
 ## 使用
 
@@ -146,7 +154,7 @@ dsh plugin --profile desktop add link:$(pwd)
 
 ## English summary
 
-A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from a local directory (`dsh plugin --profile desktop add link:$(pwd)` or Plugins → Add plugin), configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. Multiple servers stay connected concurrently, each with its own kept-alive embedded view; a top tab bar switches between them (one tab per connected server, no reload), and a "+" tab opens the server list to add another (connected hosts are marked and offer 进入/enter, never a repeat connection). The two-pane SFTP transfer view is kept from upstream. Switching to another panel keeps every remote session AND its exact embedded view alive (returning restores it without reconnecting; a full page refresh re-adopts the live sessions), and hosts can be hidden/restored in the panel without ever touching `~/.ssh/config` (connected hosts must be disconnected first). Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
+A security-focused fork of [1583477320/remote-dsh](https://github.com/1583477320/remote-dsh) (baseline: npm `dsh-remote-panel-ssh@0.3.0`, Apache-2.0). It embeds the **full remote DSH web GUI** in the Desktop app over a direct OpenSSH connection. Hosts come from `~/.ssh/config` and reuse your keys, ssh-agent and `known_hosts` — unknown host keys fail closed, and no passwords or credentials are ever stored. A healthy remote `dsh web` is attached as-is; otherwise a matching runtime is **side-installed** into an isolated directory. The plugin **never kills or restarts remote processes**: unsafe takeovers surface a manual-action card with the reason, hint and PIDs, plus a retry button. The gateway heals its own auth token on 401 without restarting anything; dropped sessions require a manual reconnect. Scope: DSH `0.2.2-rc.3` only (host-side version gate), Linux remotes, direct SSH only — no ProxyJump/ProxyCommand, certificates, CA or KRL; Windows/macOS remotes are untested. Install from npm (`dsh plugin --profile desktop add dsh-remote-panel-openssh`, or Plugins → Add plugin → the npm name); for local development use `link:$(pwd)`. See `docs/DEVELOPMENT.md` for architecture and release notes. Configure `Host` entries in `~/.ssh/config`, run `ssh <alias>` once to accept the host key, then Test / Connect in the "远程 DSH" panel. Multiple servers stay connected concurrently, each with its own kept-alive embedded view; a top tab bar switches between them (one tab per connected server, no reload), and a "+" tab opens the server list to add another (connected hosts are marked and offer 进入/enter, never a repeat connection). The two-pane SFTP transfer view is kept from upstream. Switching to another panel keeps every remote session AND its exact embedded view alive (returning restores it without reconnecting; a full page refresh re-adopts the live sessions), and hosts can be hidden/restored in the panel without ever touching `~/.ssh/config` (connected hosts must be disconnected first). Published as the fork [jyshangguan/remote-dsh](https://github.com/jyshangguan/remote-dsh) (branch `openssh-safe-panel`).
 
 **Versus upstream 0.3.0**, this fork additionally: resolves the effective SSH config via `ssh -G` and verifies host keys against `known_hosts` (fail-closed); adds an optional per-host `nodeBin` so an existing nvm Node is used without auto-installing Node; launches with rc.3-correct syntax (`--profile <p> --host … --port …`, no `web` positional) and detects both process forms; resolves the DSH version host-side from `profileContext.installAnchor`; validates launch tokens with a real 303+cookie exchange; styles the panel with `--dsw-alias-*` theme tokens (readable in dark theme); and removes config sync, password hosts, and every auto-kill/restart path. The full comparison table and the six bugs fixed during the real-server pilot (each with a regression test, 121 tests total) are in the Chinese section 「与上游原版的差异」 above.
 

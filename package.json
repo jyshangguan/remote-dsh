@@ -1,7 +1,6 @@
 {
   "name": "dsh-remote-panel-openssh",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.2.1",
   "description": "在桌面端 DSH 内通过 OpenSSH 直连嵌入远端完整 DSH 界面：安全接管、侧装匹配运行时、绝不静默重启。Embed the full remote DSH GUI in Desktop over OpenSSH: safe attach, side-installed runtime, no silent restarts.",
   "type": "module",
   "main": "lib/index.js",
