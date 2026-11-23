@@ -9,7 +9,7 @@
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ManualActionRequired, openSession, probeHost, run, probeWebPort, webServers, portInUse } from '../lib/remote.js'
+import { ManualActionRequired, openSession, probeHost, run, probeWebPort, webServers, portInUse, gatewayPortFor } from '../lib/remote.js'
 
 const BASE = '$HOME/.local/share/dsh-remote-panel-openssh'
 const LOCK = BASE + '/locks/web-18080.lock'
@@ -428,6 +428,28 @@ test('nodeBin: install/spawn/version commands prepend the configured remote bin 
 // Node auto-discovery: nvm/fnm/... only load in interactive shells, so the
 // non-interactive PATH node can be an old system one while the user's login
 // shell has a supported Node. Discovery rescues the connect.
+
+test('gatewayPortFor: stable in-range port per alias (the iframe origin must survive reconnects)', async () => {
+  const a = gatewayPortFor('myhost')
+  const b = gatewayPortFor('myhost')
+  const other = gatewayPortFor('otherhost')
+  assert.equal(a, b, 'same alias must map to the same port')
+  assert.ok(Number.isInteger(a) && a >= 41000 && a <= 41899, 'port outside the 41000..41899 range: ' + a)
+  assert.ok(Number.isInteger(other) && other >= 41000 && other <= 41899)
+})
+
+test('openSession asks the gateway for the stable per-host port', async () => {
+  const flow = discoveryFlow({ paths: [], versions: {}, defaultNode: 'v24.13.1' })
+  const client = fakeClient(flow.script)
+  const { deps, state } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const session = await openSession(ENTRY, { version: '0.3.0', deps })
+  assert.ok(state.gatewayOptions.length >= 1, 'no gateway created')
+  for (const options of state.gatewayOptions) {
+    assert.equal(options.preferredPort, gatewayPortFor('myhost'), 'gateway not given the stable port')
+  }
+  assertNoKill(client.commands)
+  await session.close()
+})
 
 /**
  * Full install-and-start script where the default PATH node fails the check

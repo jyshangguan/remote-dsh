@@ -40,7 +40,7 @@ Companion docs: `README.md` (user-facing, Chinese + English summary),
 | `hosts.js` | Settings store ONLY: `$DSH_HOME/remote-dsh-openssh.json` (schema v2, atomic tmp+rename, dir 0700 / file 0600). Top-level `hidden: [alias…]` list. Never touches `~/.ssh/*`. |
 | `openssh.js` | Read-only `~/.ssh/config` enumeration (Include-aware), `ssh -G` effective config, `ssh-keygen -F` known_hosts verification (fail-closed). `SshError` stable codes. |
 | `remote.js` | `openSession()` / `probeHost()`; attach-only lifecycle; side-install runtime; rc.3 spawn syntax; **uid-scoped** `pgrep` process scan; launch lock; 0600 logs; token validation via real 303+cookie; `stopRemoteWeb()` — the 重启-only SIGTERM path (see §4b). |
-| `gateway.js` | Per-session loopback HTTP+WS gateway; holds the remote auth cookie (solves SameSite=Strict for the `dsh-app://` shell); 401 self-heal; Esc bridge injection. |
+| `gateway.js` | Per-session loopback HTTP+WS gateway; holds the remote auth cookie (solves SameSite=Strict for the `dsh-app://` shell); 401 self-heal; Esc bridge injection; **stable per-host preferred port** (`remote.gatewayPortFor(alias)`, 41000..41899, EADDRINUSE scans forward) so the iframe ORIGIN — and with it the remote web app's localStorage session selection (`dsh.sessions.current`) — survives reconnects and remote restarts. |
 | `sftp.js` / `localfs.js` | One fs protocol, two backends (remote SFTP over the same SSH conn; desktop fs) for the two-pane transfer view. |
 
 ---
