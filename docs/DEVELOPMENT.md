@@ -160,6 +160,7 @@ the buttons stay reachable over the zoomed remote view. Any future full-bleed
 surface that reaches y < 40 must respect the same var, or it will cover the seat
 buttons again.
 
+
 **§4b. The 重启 exception to "never signal" (2026-11-23).** The fork's rule is
 still "no automatic path ever signals a remote process". The ONE deliberate
 exception is `openSession({ restart: true })` — reachable only through
@@ -174,6 +175,18 @@ path boots the server again. `kill`/`kill -0` may therefore appear ONLY in
 commands issued by that path — every other flow must keep passing
 `assertNoKill`. Tests: three restart cases + one "no restart ⇒ no signal"
 guard in `test/remote.test.mjs`; route wiring in `test/api.test.mjs`.
+
+**§4c. Window-drag marks (2026-11-23, "cannot move the window over the remote
+panel").** The shell's drag contract: `html[data-platform='darwin']
+[data-window-drag]` becomes `-webkit-app-region: drag`, and interactive children
+(button/a/input/…) are excluded by the same base.css rule. The conversation
+header marks itself; when OUR panel is the active main view the window's top rows
+are our chrome, so the TabBar, the session header and the picker header all carry
+`data-window-drag` — without them the window cannot be dragged at all while a
+remote panel is active. The magnified (Esc) stage is NOT marked: its top is the
+remote app's own content, which no local CSS can make draggable. The harness
+asserts the computed app-region of both rows, the no-drag of the buttons, and
+that the iframe container stays non-drag.
 
 ---
 
