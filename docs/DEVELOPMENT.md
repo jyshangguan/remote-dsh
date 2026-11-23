@@ -35,11 +35,11 @@ Companion docs: `README.md` (user-facing, Chinese + English summary),
 
 | File | Responsibility |
 |---|---|
-| `index.js` | cordis plugin (`inject ['webServer']`); version gate (`SUPPORTED_DSH`); `createApp(deps)` route table (DI for tests); **concurrent** sessions Map + jobs Map + **per-host** `generations` Map + `sessionSeq`; routes `hosts/connect/disconnect/state/test/hide/fs/local`; `apply()` wires + disposes. |
+| `index.js` | cordis plugin (`inject ['webServer']`); version gate (`SUPPORTED_DSH`); `createApp(deps)` route table (DI for tests); **concurrent** sessions Map + jobs Map + **per-host** `generations` Map + `sessionSeq`; routes `hosts/connect/restart/disconnect/state/test/hide/fs/local`; `apply()` wires + disposes. |
 | `client.js` | React panel: `frameStore` + `viewStates` + `lastActiveId`; `FrameHost` (shell.overlay); `TabBar`; `RemoteDshPage` (picker shell); `SessionView` (keyed per host); `TransferView`; settings editor. |
 | `hosts.js` | Settings store ONLY: `$DSH_HOME/remote-dsh-openssh.json` (schema v2, atomic tmp+rename, dir 0700 / file 0600). Top-level `hidden: [alias…]` list. Never touches `~/.ssh/*`. |
 | `openssh.js` | Read-only `~/.ssh/config` enumeration (Include-aware), `ssh -G` effective config, `ssh-keygen -F` known_hosts verification (fail-closed). `SshError` stable codes. |
-| `remote.js` | `openSession()` / `probeHost()`; attach-only lifecycle; side-install runtime; rc.3 spawn syntax; **uid-scoped** `pgrep` process scan; launch lock; 0600 logs; token validation via real 303+cookie. |
+| `remote.js` | `openSession()` / `probeHost()`; attach-only lifecycle; side-install runtime; rc.3 spawn syntax; **uid-scoped** `pgrep` process scan; launch lock; 0600 logs; token validation via real 303+cookie; `stopRemoteWeb()` — the 重启-only SIGTERM path (see §4b). |
 | `gateway.js` | Per-session loopback HTTP+WS gateway; holds the remote auth cookie (solves SameSite=Strict for the `dsh-app://` shell); 401 self-heal; Esc bridge injection. |
 | `sftp.js` / `localfs.js` | One fs protocol, two backends (remote SFTP over the same SSH conn; desktop fs) for the two-pane transfer view. |
 
@@ -159,6 +159,21 @@ no row of its own below the band, so it keeps `left: var(…)` while collapsed a
 the buttons stay reachable over the zoomed remote view. Any future full-bleed
 surface that reaches y < 40 must respect the same var, or it will cover the seat
 buttons again.
+
+**§4b. The 重启 exception to "never signal" (2026-11-23).** The fork's rule is
+still "no automatic path ever signals a remote process". The ONE deliberate
+exception is `openSession({ restart: true })` — reachable only through
+`POST /restart`, which only the panel's 重启 button calls (after a confirm):
+`stopRemoteWeb` SIGTERMs the `dsh web` processes that (a) the uid-scoped pgrep
+scan found, (b) parse to OUR webPort, and (c) still match DSH_WEB_PATTERN in
+`/proc/<pid>/cmdline` re-read immediately before the signal (PID-reuse guard).
+Never SIGKILL; a process that ignores SIGTERM for 20 s becomes
+ManualActionRequired. Afterwards our OWN lock dir is dropped only when its pid
+file points at a terminated (or gone) pid, then the normal install-and-start
+path boots the server again. `kill`/`kill -0` may therefore appear ONLY in
+commands issued by that path — every other flow must keep passing
+`assertNoKill`. Tests: three restart cases + one "no restart ⇒ no signal"
+guard in `test/remote.test.mjs`; route wiring in `test/api.test.mjs`.
 
 ---
 

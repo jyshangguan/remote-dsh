@@ -602,6 +602,139 @@ test('probeHost reports the node a connect would use (discovered when the defaul
   assert.ok(client.ended >= 1)
 })
 
+// ---------------------------------------------------------------------------
+// Restart (重启): the single deliberate exception to "never signal a remote
+// process" — SIGTERM the port-matching dsh web, then boot it again.
+
+/** Assert every kill command is a plain SIGTERM to one of the given pids. */
+function assertOnlySigterm(commands, pids) {
+  const kills = commands.filter(c => /^kill\b/.test(c))
+  assert.deepEqual(kills, pids.map(pid => 'kill ' + pid), 'unexpected signal commands: ' + kills.join(' | '))
+  assert.ok(!commands.some(c => / -9\b|-KILL|SIGKILL/.test(c)), 'escalated to SIGKILL')
+}
+
+test('restart: SIGTERMs the port-matching dsh web, drops the stale lock, respawns and reattaches', async () => {
+  const PID = 15306
+  let killed = false
+  let spawned = false
+  let spawnedLogPath = ''
+  let sideCalls = 0
+  const stages = []
+  const client = fakeClient([
+    // The whole scan is one command; the server vanishes after the SIGTERM.
+    [/pgrep -f/, () => ({ code: 0, stdout: killed || spawned ? '' : row(PID, 1700000000, LIVE_ARGS) + '\n', stderr: '' })],
+    // dshWebProcesses AND the pre-signal re-verification read /proc/<pid>/cmdline.
+    [/tr "\\000" " " < \/proc\//, { code: 0, stdout: LIVE_ARGS + ' ', stderr: '' }],
+    [/^kill 15306$/, () => { killed = true; return { code: 0, stdout: '', stderr: '' } }],
+    // Our lock pid file points at the terminated pid -> stale lock removed.
+    [/^cat "/, { code: 0, stdout: PID + '\n', stderr: '' }],
+    [/^curl /, () => ({ code: 0, stdout: spawned ? '200' : '000', stderr: '' })],
+    portReply('0'),
+    nodeReply(),
+    [/node_modules\/\.bin\/dsh" --version/, () => { sideCalls++; return { code: 0, stdout: sideCalls === 1 ? '0.3.0\n' : '0.3.0\n', stderr: '' } }],
+    lockReply(0),
+    testEReply(1),
+    [/nohup env/, command => {
+      spawned = true
+      const match = /> "([^"]+)" 2>&1/.exec(command)
+      spawnedLogPath = match === null ? '' : match[1]
+      return { code: 0, stdout: '4242\n', stderr: '' }
+    }],
+    pidMarkerReply(),
+    rmReply(),
+    [/^ls -1t/, () => ({ code: 0, stdout: spawnedLogPath === '' ? '' : spawnedLogPath.split('/').pop() + '\n', stderr: '' })],
+    grepReply(path => path === spawnedLogPath ? ['nvtok'] : []),
+    tailReply(),
+  ])
+  const { deps, state } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const session = await openSession(ENTRY, { version: '0.3.0', deps, restart: true, stage: value => stages.push(value) })
+  const commands = client.commands
+
+  // Stopping phase ran before the normal checking/installing stages.
+  assert.ok(stages.includes('restarting'), 'restarting stage missing: ' + stages.join(','))
+  assert.ok(stages.indexOf('restarting') < stages.indexOf('checking'), 'restart did not stop first')
+
+  // Exactly one plain SIGTERM, after the /proc re-verification, never -9.
+  assertOnlySigterm(commands, [PID])
+  assert.ok(commands.includes('kill 15306'), 'SIGTERM missing')
+  const trIndex = commands.findIndex(c => /\/proc\/15306\/cmdline/.test(c))
+  const killIndex = commands.indexOf('kill 15306')
+  assert.ok(trIndex >= 0 && trIndex < killIndex, 'cmdline not re-verified before the signal')
+
+  // The stale lock (pid file = terminated pid) was removed BEFORE the respawn
+  // re-acquired it, and no npm install ran (runtime already present).
+  const rmIndex = commands.findIndex(c => c === 'rm -rf "' + LOCK + '"')
+  const lockIndex = commands.findIndex(c => c.includes('&& mkdir "' + LOCK + '"'))
+  assert.ok(rmIndex >= 0 && lockIndex >= 0 && rmIndex < lockIndex, 'stale lock not cleared before re-acquire')
+  assert.ok(!commands.some(c => /npm i/.test(c)), 'npm install ran during restart')
+
+  assert.deepEqual(state.tokensReturned, ['nvtok'])
+  await session.close()
+  assert.ok(client.ended >= 1)
+})
+
+test('restart: a dsh web that ignores SIGTERM -> ManualActionRequired, never SIGKILL', async () => {
+  const PID = 15306
+  const client = fakeClient([
+    [/pgrep -f/, { code: 0, stdout: row(PID, 1700000000, LIVE_ARGS) + '\n', stderr: '' }],
+    [/tr "\\000" " " < \/proc\//, { code: 0, stdout: LIVE_ARGS + ' ', stderr: '' }],
+    [/^kill 15306$/, { code: 0, stdout: '', stderr: '' }],
+    [/^cat "/, { code: 0, stdout: PID + '\n', stderr: '' }],
+  ])
+  const { deps } = makeDeps(client)
+  await assert.rejects(openSession(ENTRY, { version: '0.3.0', deps, restart: true }), error => {
+    assert.ok(error instanceof ManualActionRequired)
+    assert.match(error.message, /未在 20 秒内退出/)
+    assert.deepEqual(error.detail.pids, [PID])
+    assert.match(error.detail.hint, /SIGKILL/)
+    return true
+  })
+  assertOnlySigterm(client.commands, [PID])
+  assert.ok(client.ended >= 1)
+})
+
+test('restart: nothing running + stale lock whose pid is gone -> lock cleaned, fresh boot, zero signals', async () => {
+  let spawned = false
+  let spawnedLogPath = ''
+  const client = fakeClient([
+    pgrepReply(),
+    [/^cat "/, { code: 0, stdout: '999\n', stderr: '' }],
+    [/^kill -0 999/, { code: 1, stdout: '', stderr: '' }],
+    rmReply(),
+    nodeReply(),
+    [/^curl /, () => ({ code: 0, stdout: spawned ? '200' : '000', stderr: '' })],
+    portReply('0'),
+    sideReply('0.3.0'),
+    lockReply(0),
+    testEReply(1),
+    [/nohup env/, command => {
+      spawned = true
+      const match = /> "([^"]+)" 2>&1/.exec(command)
+      spawnedLogPath = match === null ? '' : match[1]
+      return { code: 0, stdout: '4242\n', stderr: '' }
+    }],
+    pidMarkerReply(),
+    [/^ls -1t/, () => ({ code: 0, stdout: spawnedLogPath === '' ? '' : spawnedLogPath.split('/').pop() + '\n', stderr: '' })],
+    grepReply(path => path === spawnedLogPath ? ['nvtok'] : []),
+  ])
+  const { deps } = makeDeps(client, { verdicts: { nvtok: COOKIE } })
+  const session = await openSession(ENTRY, { version: '0.3.0', deps, restart: true })
+  // No live process: no signal at all (the kill -0 existence probe is not one).
+  assert.ok(!client.commands.some(c => /^kill \d+$/.test(c)), 'signalled something')
+  assert.ok(client.commands.some(c => c.startsWith('kill -0 999')), 'existence probe missing')
+  assert.ok(client.commands.includes('rm -rf "' + LOCK + '"'), 'stale lock not removed')
+  await session.close()
+})
+
+test('openSession without restart never signals anything (the rule stands)', async () => {
+  const client = fakeClient([
+    nodeReply(), probeReply('000'), pgrepReply(), portReply('0'), sideReply('0.3.0'), lockReply(1),
+  ])
+  const { deps } = makeDeps(client)
+  await assert.rejects(openSession(ENTRY, { version: '0.3.0', deps }), /另一连接正在准备/)
+  assertNoKill(client.commands)
+})
+
 test('lock contention + web now alive -> attach, never removes the lock', async () => {
   let probeCalls = 0
   const client = fakeClient([

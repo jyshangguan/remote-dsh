@@ -191,6 +191,7 @@ test('plugin identity and exact route table, no sync routes', async () => {
   const expected = [
     ['exact', API + '/hosts'],
     ['exact', API + '/connect'],
+    ['exact', API + '/restart'],
     ['exact', API + '/disconnect'],
     ['exact', API + '/hide'],
     ['exact', API + '/state'],
@@ -201,7 +202,6 @@ test('plugin identity and exact route table, no sync routes', async () => {
   assert.deepEqual(app.routes.map(route => [route.kind, route.path]).sort(), expected.sort())
   for (const route of app.routes) {
     assert.ok(!route.path.includes('/sync'), 'no sync route: ' + route.path)
-    assert.ok(!route.path.includes('restart'), 'no restart route: ' + route.path)
   }
   await app.closeAll()
 })
@@ -323,6 +323,41 @@ test('connect: a generic openSession error lands in failed with the message', as
   assert.equal(row.error, 'known_hosts 校验失败')
   assert.equal(row.connected, false)
   assert.equal(row.proxyUrl, null)
+  await app.closeAll()
+})
+
+test('restart: closes the live session and re-opens with restart: true', async () => {
+  const { app, state } = makeHarness()
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  await waitStage(app, 'openssh:alpha', 'ready')
+  const recordA = state.sessions[0]
+  const restarts = []
+  state.openImpl = async (entry, options, makeSession) => {
+    restarts.push({ id: entry.id, restart: options.restart === true })
+    options.stage('ssh')
+    options.stage('ready')
+    return makeSession(entry).session
+  }
+  const response = await call(app, 'POST', API + '/restart', { id: 'openssh:alpha' })
+  assert.equal(response.status, 202)
+  assert.equal(response.json.stage, 'restarting')
+  await waitStage(app, 'openssh:alpha', 'ready')
+  assert.equal(recordA.closeCalls, 1, 'the old session was not closed before restarting')
+  assert.deepEqual(restarts, [{ id: 'openssh:alpha', restart: true }], 'openSession not asked to restart')
+  assert.equal(state.sessions.length, 2, 'a fresh session was published')
+  await app.closeAll()
+})
+
+test('restart while a connect job is in flight -> 409', async () => {
+  const { app, state } = makeHarness()
+  const gate = deferred()
+  state.openImpl = (entry, options, makeSession) => gate.promise.then(() => makeSession(entry).session)
+  await call(app, 'POST', API + '/connect', { id: 'openssh:alpha' })
+  const response = await call(app, 'POST', API + '/restart', { id: 'openssh:alpha' })
+  assert.equal(response.status, 409)
+  assert.match(response.json.error, /进行/)
+  gate.resolve()
+  await waitStage(app, 'openssh:alpha', 'ready')
   await app.closeAll()
 })
 
